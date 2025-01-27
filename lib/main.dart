@@ -6,6 +6,7 @@ import 'models/app_settings.dart';
 import 'models/chat_message.dart';
 import 'models/chat_session.dart';
 import 'services/deepseek_service.dart';
+import 'services/voice_service.dart';
 import 'providers/chat_provider.dart';
 import 'ui/chat_screen.dart';
 
@@ -38,10 +39,13 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
-      create: (_) => ChatProvider(DeepSeekService(
-        apiKey: apiKey,
-        baseUrl: 'https://api.deepseek.com/v1',
-      )),
+      create: (_) => ChatProvider(
+        DeepSeekService(
+          apiKey: const String.fromEnvironment('DEEPSEEK_API_KEY', defaultValue: ''),
+          baseUrl: 'https://api.deepseek.com/v1',
+        ),
+        VoiceService(),
+      ),
       child: MaterialApp(
         title: 'DeepSeek Chat',
         theme: ThemeData(

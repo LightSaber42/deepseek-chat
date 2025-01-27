@@ -167,8 +167,8 @@ class VoiceService {
   }
 
   Future<void> speak(String text, {bool isLastChunk = false}) async {
-    if (text.trim().isEmpty) {
-      debugPrint('[TTS] Skipping empty text');
+    if (text.startsWith('🤔')) {
+      debugPrint('[TTS] Skipping reasoning content: $text');
       return;
     }
 

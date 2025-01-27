@@ -9,12 +9,13 @@ import 'dart:math' show min;
 import 'dart:async';
 import 'dart:collection';
 
-class ChatProvider with ChangeNotifier {
+class ChatProvider extends ChangeNotifier {
   static const String _settingsBoxName = 'settings';
 
-  final DeepSeekService _apiService;
+  final DeepSeekService _deepseekService;
   final VoiceService _voiceService;
-  List<ChatMessage> _messages = [];
+  final List<ChatMessage> _messages = [];
+  final List<ChatMessage> _history = [];
   bool _isResponding = false;
   String _systemPrompt = '';
   String? _accountBalance;
@@ -24,27 +25,22 @@ class ChatProvider with ChangeNotifier {
   StreamSubscription<String>? _ttsSubscription;
   final Queue<String> _ttsQueue = Queue<String>();
   bool _isProcessingTts = false;
-  bool _isLastChunk = false;
+  StringBuffer _currentTtsBuffer = StringBuffer();
+  DateTime _lastTtsChunkTime = DateTime.now();
 
   bool get isResponding => _isResponding;
   bool get isListening => _voiceService.isListening;
   bool get isSpeaking => _voiceService.isSpeaking;
   bool get isMuted => _voiceService.isMuted;
   String get systemPrompt => _systemPrompt;
-  String get apiKey => _apiService.apiKey;
+  String get apiKey => _deepseekService.apiKey;
   String? get accountBalance => _accountBalance;
   bool get useReasoningModel => _settingsBox.get(0)?.useReasoningModel ?? false;
 
-  ChatProvider(this._apiService) : _voiceService = VoiceService() {
+  ChatProvider(this._deepseekService, this._voiceService) {
     _initServices();
     _initTtsListener();
-    // Set up TTS completion callback
-    _voiceService.setTtsCompleteCallback(() {
-      if (!_voiceService.isListening) {
-        toggleVoiceInput();
-      }
-    });
-    // Set up state change callback
+    _voiceService.setTtsCompleteCallback(_onTtsComplete);
     _voiceService.setStateChangeCallback(() {
       debugPrint('[Chat] Voice service state changed, notifying listeners');
       notifyListeners();
@@ -53,25 +49,53 @@ class ChatProvider with ChangeNotifier {
 
   void _initTtsListener() {
     _ttsSubscription = _ttsController.stream.listen((text) {
-      _ttsQueue.add(text);
-      _processTtsQueue();
+      // Add to current buffer
+      _currentTtsBuffer.write(text);
+
+      // Check if we should flush the buffer (after a short delay or on punctuation)
+      if (text.contains(RegExp(r'[.!?,]')) ||
+          DateTime.now().difference(_lastTtsChunkTime) > const Duration(milliseconds: 500)) {
+        if (_currentTtsBuffer.isNotEmpty) {
+          _ttsQueue.add(_currentTtsBuffer.toString());
+          _currentTtsBuffer.clear();
+          _processTtsQueue();
+        }
+      }
+      _lastTtsChunkTime = DateTime.now();
     });
   }
 
-  Future<void> _processTtsQueue() async {
+  void _processTtsQueue() async {
     if (_isProcessingTts || _ttsQueue.isEmpty) return;
 
     _isProcessingTts = true;
     try {
       while (_ttsQueue.isNotEmpty) {
         final text = _ttsQueue.first;
-        final isLastItem = _ttsQueue.length == 1 && _isLastChunk;
-        await _voiceService.speak(text, isLastChunk: isLastItem);
+        // Only speak non-reasoning content
+        if (!text.contains('REASONING_START') && !text.contains('SPLIT_MESSAGE')) {
+          debugPrint('[Chat] Speaking phrase: $text');
+          await _voiceService.speak(text);
+        }
         _ttsQueue.removeFirst();
+      }
+
+      // Speak any remaining buffered content
+      if (_currentTtsBuffer.isNotEmpty) {
+        final remainingText = _currentTtsBuffer.toString();
+        _currentTtsBuffer.clear();
+        if (!remainingText.contains('REASONING_START') && !remainingText.contains('SPLIT_MESSAGE')) {
+          debugPrint('[Chat] Speaking final phrase: $remainingText');
+          await _voiceService.speak(remainingText);
+        }
+      }
+
+      if (_ttsQueue.isEmpty) {
+        debugPrint('[Chat] All TTS chunks completed, triggering completion');
+        _voiceService.onTtsQueueComplete();
       }
     } finally {
       _isProcessingTts = false;
-      _isLastChunk = false;
     }
   }
 
@@ -98,12 +122,12 @@ class ChatProvider with ChangeNotifier {
     _systemPrompt = settings.systemPrompt;
 
     // Update API key if different
-    if (settings.apiKey != _apiService.apiKey) {
-      await _apiService.updateApiKey(settings.apiKey);
+    if (settings.apiKey != _deepseekService.apiKey) {
+      await _deepseekService.updateApiKey(settings.apiKey);
     }
 
     // Set the model
-    await _apiService.setModel(settings.useReasoningModel ? 'deepseek-reasoner' : 'deepseek-chat');
+    await _deepseekService.setModel(settings.useReasoningModel ? 'deepseek-reasoner' : 'deepseek-chat');
 
     notifyListeners();
   }
@@ -124,7 +148,7 @@ class ChatProvider with ChangeNotifier {
   }
 
   Future<void> updateApiKey(String apiKey) async {
-    await _apiService.updateApiKey(apiKey);
+    await _deepseekService.updateApiKey(apiKey);
 
     final settings = _settingsBox.get(0) ?? AppSettings.defaults();
     settings.apiKey = apiKey;
@@ -137,7 +161,7 @@ class ChatProvider with ChangeNotifier {
 
   Future<void> refreshBalance() async {
     try {
-      _accountBalance = await _apiService.getAccountBalance();
+      _accountBalance = await _deepseekService.getAccountBalance();
       notifyListeners();
     } catch (e) {
       debugPrint('Error fetching account balance: $e');
@@ -178,84 +202,81 @@ class ChatProvider with ChangeNotifier {
     return wordBoundary != -1 ? wordBoundary : startIndex;
   }
 
-  Future<void> sendMessage(String text) async {
+  Future<void> sendMessage(String message) async {
+    if (message.trim().isEmpty) return;
+
     try {
       _isResponding = true;
-      _isLastChunk = false;
+      final userMessage = ChatMessage(role: 'user', content: message);
+      _messages.add(userMessage);
+      _history.add(userMessage);
       notifyListeners();
 
-      final userMessage = ChatMessage(role: 'user', content: text);
-      _messages = [..._messages, userMessage];
+      var currentReasoningBuffer = StringBuffer();
+      var currentResponseBuffer = StringBuffer();
+      var isInReasoning = false;
+      ChatMessage? reasoningMessage;
+      ChatMessage? responseMessage;
 
-      final history = _systemPrompt.isNotEmpty
-          ? [
-              {'role': 'system', 'content': _systemPrompt},
-              ..._messages.map((m) => m.toJson()).toList()
-            ]
-          : _messages.map((m) => m.toJson()).toList();
-
-      final responseStream = await _apiService.sendMessage(history);
-      final assistantMessage = ChatMessage(role: 'assistant', content: '');
-      _messages = [..._messages, assistantMessage];
-
-      String displayBuffer = '';
-      String ttsBuffer = '';
-      bool initialChunkSent = false;
-      const int initialChunkSize = 100;
-      const int subsequentChunkSize = 500;
-
-      // Clear any existing TTS queue before starting new message
-      _ttsQueue.clear();
-
-      // Immediate display updates
-      await for (final content in responseStream) {
-        // Update display immediately
-        displayBuffer += content;
-        _messages.last.content = displayBuffer;
-        notifyListeners();
-
-        // Only add to TTS if it's not a reasoning content
-        if (!content.startsWith('[Thinking]')) {
-          // Accumulate for TTS
-          ttsBuffer += content;
-
-          // Handle initial chunk with natural breaks
-          if (!initialChunkSent && ttsBuffer.length >= initialChunkSize) {
-            final splitIndex = _findSplitIndex(ttsBuffer, initialChunkSize);
-            _ttsController.add(ttsBuffer.substring(0, splitIndex));
-            ttsBuffer = ttsBuffer.substring(splitIndex);
-            initialChunkSent = true;
+      final stream = await _deepseekService.sendMessage(_history.map((m) => m.toJson()).toList());
+      await for (String chunk in stream) {
+        if (chunk == '🤔REASONING_START🤔') {
+          isInReasoning = true;
+          // Create reasoning message if it doesn't exist
+          if (reasoningMessage == null) {
+            reasoningMessage = ChatMessage(role: 'assistant', content: '[Reasoning]\n');
+            _messages.add(reasoningMessage);
           }
+          continue;
+        }
+        if (chunk == '🤔REASONING_END🤔') {
+          isInReasoning = false;
+          continue;
+        }
+        if (chunk == '💫SPLIT_MESSAGE💫') {
+          // Create response message when we transition to it
+          responseMessage = ChatMessage(role: 'assistant', content: '');
+          _messages.add(responseMessage);
+          continue;
+        }
 
-          // Handle subsequent chunks with natural breaks
-          if (initialChunkSent && ttsBuffer.length >= subsequentChunkSize) {
-            final splitIndex = _findSplitIndex(ttsBuffer, subsequentChunkSize);
-            _ttsController.add(ttsBuffer.substring(0, splitIndex));
-            ttsBuffer = ttsBuffer.substring(splitIndex);
+        if (isInReasoning) {
+          currentReasoningBuffer.write(chunk);
+          if (reasoningMessage != null) {
+            reasoningMessage.content = '[Reasoning]\n${currentReasoningBuffer.toString().trim()}';
+          }
+        } else {
+          // Only process response content if we're not in reasoning
+          if (responseMessage != null) {
+            currentResponseBuffer.write(chunk);
+            responseMessage.content = currentResponseBuffer.toString().trim();
+            // Only send non-reasoning content to TTS
+            _ttsController.add(chunk);
           }
         }
+        notifyListeners();
       }
 
-      // Process any remaining content
-      if (ttsBuffer.isNotEmpty) {
-        _isLastChunk = true;
-        _ttsController.add(ttsBuffer);
+      // Add the final response to history
+      if (responseMessage != null) {
+        _history.add(responseMessage);
       }
-
-      _isResponding = false;
-      notifyListeners();
+      _processTtsQueue();
     } catch (e) {
-      debugPrint('[Error] Failed to get response: $e');
-      _messages = [..._messages, ChatMessage(role: 'assistant', content: 'Error: Failed to get response from API')];
+      debugPrint('[Chat] Error sending message: $e');
+      _messages.add(ChatMessage(
+        role: 'assistant',
+        content: 'I apologize, but I encountered an error. Please try again.'
+      ));
+    } finally {
       _isResponding = false;
-      _isLastChunk = false;
       notifyListeners();
     }
   }
 
   Future<bool> testApiConnection() async {
     try {
-      final isConnected = await _apiService.testConnection();
+      final isConnected = await _deepseekService.testConnection();
       return isConnected;
     } catch (e) {
       debugPrint('Error testing API connection: $e');
@@ -279,15 +300,21 @@ class ChatProvider with ChangeNotifier {
     final settings = _settingsBox.get(0) ?? AppSettings.defaults();
     settings.useReasoningModel = value;
     await _settingsBox.put(0, settings);
-    await _apiService.setModel(value ? 'deepseek-reasoner' : 'deepseek-chat');
+    await _deepseekService.setModel(value ? 'deepseek-reasoner' : 'deepseek-chat');
     notifyListeners();
   }
 
   void clearMessages() {
-    _messages = [];
+    _messages.clear();
     _ttsQueue.clear();
     _isProcessingTts = false;
     _voiceService.stopSpeaking();
     notifyListeners();
+  }
+
+  void _onTtsComplete() {
+    if (!_voiceService.isListening) {
+      toggleVoiceInput();
+    }
   }
 }
