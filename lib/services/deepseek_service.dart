@@ -5,16 +5,99 @@ import 'package:flutter/foundation.dart';
 
 class DeepSeekService {
   static const String _baseUrl = 'https://api.deepseek.com';
-  final String _apiKey;
+  String _apiKey;
+  String _model = 'deepseek-chat';  // Default model
+
+  String get apiKey => _apiKey;
+  String get currentModel => _model;
 
   DeepSeekService(this._apiKey) {
     debugPrint('DeepSeekService initialized with API key length: ${_apiKey.length}');
   }
 
+  Future<void> setModel(String model) async {
+    if (model != 'deepseek-chat' && model != 'deepseek-reasoner') {
+      throw Exception('Invalid model name. Must be deepseek-chat or deepseek-reasoner');
+    }
+    _model = model;
+    debugPrint('Model set to: $_model');
+  }
+
+  Future<void> updateApiKey(String newApiKey) async {
+    _apiKey = newApiKey;
+    // Test the new key
+    final isValid = await testConnection();
+    if (!isValid) {
+      throw Exception('Invalid API key');
+    }
+  }
+
+  Future<String?> getAccountBalance() async {
+    try {
+      final uri = Uri.parse('${_baseUrl}/v1/dashboard/billing/credit_grants');
+      debugPrint('Fetching balance from: $uri');
+
+      final response = await http.get(
+        uri,
+        headers: {
+          'Authorization': 'Bearer $_apiKey',
+          'Content-Type': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final total = data['total_granted'] ?? 0.0;
+        final used = data['total_used'] ?? 0.0;
+        final available = total - used;
+        return '\$${available.toStringAsFixed(2)}';
+      } else {
+        debugPrint('Error fetching balance: ${response.body}');
+        return null;
+      }
+    } catch (e) {
+      debugPrint('Error fetching balance: $e');
+      return null;
+    }
+  }
+
+  String _parseContent(String line) {
+    try {
+      if (line.trim() == 'data: [DONE]') {
+        return '';
+      }
+
+      final jsonData = json.decode(line.substring(5));
+      String content = '';
+      if (jsonData['choices']?[0]?['delta']?['content'] != null) {
+        content = jsonData['choices'][0]['delta']['content'];
+      } else if (jsonData['choices']?[0]?['delta']?['reasoning_content'] != null) {
+        content = '[Reasoning] ' + jsonData['choices'][0]['delta']['reasoning_content'];
+      }
+
+      return content;
+    } catch (e) {
+      debugPrint('[Error] Failed to parse content: $e');
+      return '';
+    }
+  }
+
+  Stream<String> _processStream(Stream<List<int>> stream, http.Client client) {
+    return stream
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())
+        .where((line) => line.trim().startsWith('data:'))
+        .map((line) => _parseContent(line))
+        .where((content) => content.isNotEmpty)
+        .handleError((error) {
+          debugPrint('[Error] Stream processing failed: $error');
+          client.close();
+          throw error;
+        });
+  }
+
   Future<Stream<String>> sendMessage(List<Map<String, dynamic>> history) async {
     final uri = Uri.parse('${_baseUrl}/v1/chat/completions');
-    debugPrint('Sending request to: $uri');
-    debugPrint('Request history: ${json.encode(history)}');
 
     try {
       final client = http.Client();
@@ -28,90 +111,26 @@ class DeepSeekService {
       });
 
       final body = {
-        'model': 'deepseek-chat',
+        'model': _model,
         'messages': history,
         'stream': true,
         'max_tokens': 4096,
         'temperature': 0.7,
       };
       request.body = json.encode(body);
-      debugPrint('Request body: ${request.body}');
 
       final response = await client.send(request);
-      debugPrint('Response status code: ${response.statusCode}');
-      debugPrint('Response headers: ${response.headers}');
 
       if (response.statusCode != 200) {
         final errorBody = await response.stream.bytesToString();
-        debugPrint('Error response body: $errorBody');
-        throw Exception('API request failed with status ${response.statusCode}: $errorBody');
+        debugPrint('[Error] API request failed (${response.statusCode}): $errorBody');
+        throw Exception('API request failed');
       }
 
-      // Create a broadcast stream so we can listen to it multiple times
-      final broadcastStream = response.stream.asBroadcastStream();
-
-      // Debug stream to log raw response
-      broadcastStream.transform(utf8.decoder).listen(
-        (data) => debugPrint('Raw response data: $data'),
-        onError: (e) => debugPrint('Error in raw response stream: $e'),
-        onDone: () {
-          debugPrint('Raw response stream completed');
-          client.close();
-        },
-      );
-
-      // Process stream for actual use
-      return broadcastStream
-          .transform(utf8.decoder)
-          .transform(const LineSplitter())
-          .where((line) {
-            debugPrint('Checking line: $line');
-            final isData = line.trim().startsWith('data:');
-            if (!isData) {
-              debugPrint('Skipping non-data line: $line');
-            }
-            return isData;
-          })
-          .map((line) {
-            debugPrint('Processing line: $line');
-            return _parseContent(line);
-          })
-          .where((content) => content.isNotEmpty) // Filter out empty content
-          .handleError((error) {
-            debugPrint('Error in stream processing: $error');
-            client.close();
-            throw error;
-          });
-    } catch (e, stackTrace) {
-      debugPrint('Error in sendMessage: $e');
-      debugPrint('Stack trace: $stackTrace');
-      rethrow;
-    }
-  }
-
-  String _parseContent(String line) {
-    try {
-      if (line.trim() == 'data: [DONE]') {
-        debugPrint('Received DONE signal');
-        return '';
-      }
-
-      final jsonData = json.decode(line.substring(5));
-      debugPrint('Parsed JSON data: $jsonData');
-
-      String content = '';
-      if (jsonData['choices']?[0]?['delta']?['content'] != null) {
-        content = jsonData['choices'][0]['delta']['content'];
-      } else if (jsonData['choices']?[0]?['delta']?['reasoning_content'] != null) {
-        content = '[Reasoning] ' + jsonData['choices'][0]['delta']['reasoning_content'];
-      }
-
-      debugPrint('Parsed content: $content');
-      return content;
+      return _processStream(response.stream, client);
     } catch (e) {
-      debugPrint('Error parsing content: $e');
-      debugPrint('Problematic line: $line');
-      return '';
+      debugPrint('[Error] Failed to send message: $e');
+      rethrow;
     }
   }
 

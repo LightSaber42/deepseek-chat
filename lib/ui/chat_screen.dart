@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/chat_provider.dart';
 import 'chat_bubble.dart';
+import 'settings_screen.dart';
 
 class ChatScreen extends StatelessWidget {
   const ChatScreen({Key? key}) : super(key: key);
@@ -11,10 +12,30 @@ class ChatScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('DeepSeek Chat'),
+        leading: IconButton(
+          icon: const Icon(Icons.menu),
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (context) => const SettingsScreen()),
+          ),
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.network_check),
             onPressed: () => _testConnection(context),
+          ),
+          Consumer<ChatProvider>(
+            builder: (context, provider, _) => IconButton(
+              icon: const Icon(Icons.volume_off),
+              onPressed: provider.isSpeaking ? () => provider.stopSpeaking() : null,
+            ),
+          ),
+          Consumer<ChatProvider>(
+            builder: (context, provider, _) => IconButton(
+              icon: Icon(provider.isMuted ? Icons.mic_off : Icons.mic),
+              onPressed: () => provider.toggleMute(),
+              color: provider.isMuted ? Colors.red : null,
+            ),
           ),
           IconButton(
             icon: const Icon(Icons.history),
