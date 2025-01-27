@@ -178,6 +178,8 @@ class VoiceService {
 
       _isSpeaking = true;
       await _tts.speak(cleanText);
+      // Wait for the speech to complete
+      await _tts.awaitSpeakCompletion(true);
     } catch (e) {
       debugPrint('[TTS] Error in TTS: $e');
       _isSpeaking = false;

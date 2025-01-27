@@ -56,15 +56,19 @@ class ChatProvider with ChangeNotifier {
     if (_isProcessingTts || _ttsQueue.isEmpty) return;
 
     _isProcessingTts = true;
-    while (_ttsQueue.isNotEmpty) {
-      final text = _ttsQueue.first;
-      await _voiceService.speak(text);
-      _ttsQueue.removeFirst();
-    }
-    _isProcessingTts = false;
-    // Only trigger the TTS completion callback after all chunks are spoken
-    if (_ttsQueue.isEmpty && !_isProcessingTts) {
-      _voiceService.onTtsQueueComplete();
+    try {
+      while (_ttsQueue.isNotEmpty) {
+        final text = _ttsQueue.first;
+        await _voiceService.speak(text);
+        _ttsQueue.removeFirst();
+      }
+      // Only trigger completion after all chunks are successfully spoken
+      if (_ttsQueue.isEmpty) {
+        debugPrint('[Chat] All TTS chunks completed, triggering completion');
+        _voiceService.onTtsQueueComplete();
+      }
+    } finally {
+      _isProcessingTts = false;
     }
   }
 
@@ -142,17 +146,22 @@ class ChatProvider with ChangeNotifier {
   Future<void> toggleVoiceInput() async {
     try {
       if (_voiceService.isListening) {
+        debugPrint('[Chat] Stopping voice input');
         await _voiceService.stopListening();
       } else {
+        debugPrint('[Chat] Starting voice input');
         await _voiceService.startListening((text) {
           if (text.isNotEmpty) {
+            debugPrint('[Chat] Voice input received: $text');
             sendMessage(text);
           }
         });
       }
       notifyListeners();
     } catch (e) {
-      debugPrint('Error during voice input: $e');
+      debugPrint('[Chat] Error during voice input: $e');
+      // Ensure UI is updated even if there's an error
+      notifyListeners();
     }
   }
 
