@@ -7,6 +7,7 @@ import 'package:hive/hive.dart';
 import 'dart:convert';
 import 'dart:math' show min;
 import 'dart:async';
+import 'dart:collection';
 
 class ChatProvider with ChangeNotifier {
   static const String _settingsBoxName = 'settings';
@@ -19,6 +20,11 @@ class ChatProvider with ChangeNotifier {
   String? _accountBalance;
   late Box<AppSettings> _settingsBox;
 
+  final StreamController<String> _ttsController = StreamController<String>();
+  StreamSubscription<String>? _ttsSubscription;
+  final Queue<String> _ttsQueue = Queue<String>();
+  bool _isProcessingTts = false;
+
   bool get isResponding => _isResponding;
   bool get isListening => _voiceService.isListening;
   bool get isSpeaking => _voiceService.isSpeaking;
@@ -30,6 +36,34 @@ class ChatProvider with ChangeNotifier {
 
   ChatProvider(this._apiService) : _voiceService = VoiceService() {
     _initServices();
+    _initTtsListener();
+  }
+
+  void _initTtsListener() {
+    _ttsSubscription = _ttsController.stream.listen((text) {
+      _ttsQueue.add(text);
+      _processTtsQueue();
+    });
+  }
+
+  Future<void> _processTtsQueue() async {
+    if (_isProcessingTts || _ttsQueue.isEmpty) return;
+
+    _isProcessingTts = true;
+    while (_ttsQueue.isNotEmpty) {
+      final text = _ttsQueue.first;
+      await _voiceService.speak(text);
+      _ttsQueue.removeFirst();
+    }
+    _isProcessingTts = false;
+  }
+
+  @override
+  void dispose() {
+    _ttsQueue.clear();
+    _ttsSubscription?.cancel();
+    _ttsController.close();
+    super.dispose();
   }
 
   Future<void> _initServices() async {
@@ -114,6 +148,14 @@ class ChatProvider with ChangeNotifier {
 
   List<ChatMessage> get messages => _messages;
 
+  int _findSplitIndex(String text, int startIndex) {
+    final sentenceEnd = text.lastIndexOf(RegExp(r'[.!?]'), startIndex);
+    if (sentenceEnd != -1) return sentenceEnd + 1;
+
+    final wordBoundary = text.lastIndexOf(' ', startIndex);
+    return wordBoundary != -1 ? wordBoundary : startIndex;
+  }
+
   Future<void> sendMessage(String text) async {
     try {
       _isResponding = true;
@@ -133,42 +175,44 @@ class ChatProvider with ChangeNotifier {
       final assistantMessage = ChatMessage(role: 'assistant', content: '');
       _messages = [..._messages, assistantMessage];
 
-      // Separate buffers for display and TTS
       String displayBuffer = '';
       String ttsBuffer = '';
-      bool isTtsProcessing = false;
+      bool initialChunkSent = false;
+      const int initialChunkSize = 100;
+      const int subsequentChunkSize = 500;
+
+      // Clear any existing TTS queue before starting new message
+      _ttsQueue.clear();
 
       // Immediate display updates
       await for (final content in responseStream) {
-        // Update display buffer and notify
+        // Update display immediately
         displayBuffer += content;
         _messages.last.content = displayBuffer;
         notifyListeners();
 
-        // Add to TTS buffer
+        // Accumulate for TTS
         ttsBuffer += content;
 
-        // Start TTS processing immediately when threshold is reached
-        if (ttsBuffer.length >= 100 && !isTtsProcessing) {
-          isTtsProcessing = true;
-          final currentTtsBuffer = ttsBuffer;
-          ttsBuffer = ''; // Reset buffer immediately
-          unawaited(_voiceService.speak(currentTtsBuffer).then((_) {
-            isTtsProcessing = false;
+        // Handle initial chunk with natural breaks
+        if (!initialChunkSent && ttsBuffer.length >= initialChunkSize) {
+          final splitIndex = _findSplitIndex(ttsBuffer, initialChunkSize);
+          _ttsController.add(ttsBuffer.substring(0, splitIndex));
+          ttsBuffer = ttsBuffer.substring(splitIndex);
+          initialChunkSent = true;
+        }
 
-            // Process any accumulated content after current speech
-            if (ttsBuffer.isNotEmpty && !isTtsProcessing) {
-              final remaining = ttsBuffer;
-              ttsBuffer = '';
-              _voiceService.speak(remaining);
-            }
-          }));
+        // Handle subsequent chunks with natural breaks
+        if (initialChunkSent && ttsBuffer.length >= subsequentChunkSize) {
+          final splitIndex = _findSplitIndex(ttsBuffer, subsequentChunkSize);
+          _ttsController.add(ttsBuffer.substring(0, splitIndex));
+          ttsBuffer = ttsBuffer.substring(splitIndex);
         }
       }
 
-      // Process final content
+      // Process any remaining content
       if (ttsBuffer.isNotEmpty) {
-        await _voiceService.speak(ttsBuffer);
+        _ttsController.add(ttsBuffer);
       }
 
       _isResponding = false;
@@ -176,6 +220,8 @@ class ChatProvider with ChangeNotifier {
     } catch (e) {
       debugPrint('[Error] Failed to get response: $e');
       _messages = [..._messages, ChatMessage(role: 'assistant', content: 'Error: Failed to get response from API')];
+      _isResponding = false;
+      notifyListeners();
     }
   }
 
