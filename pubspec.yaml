@@ -1,0 +1,35 @@
+name: deepseek_chat
+description: A voice-enabled chat interface for DeepSeek R1
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: '>=3.16.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+  http: ^1.2.0
+  speech_to_text: ^7.0.0
+  flutter_tts: ^3.6.3
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+  uuid: ^3.0.7
+  flutter_dotenv: ^5.0.2
+  provider: ^6.0.5
+  flutter_markdown: ^0.6.18
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  hive_generator: ^2.0.0
+  build_runner: ^2.4.6
+
+flutter:
+  uses-material-design: true
+  assets:
+    - .env
+    - assets/
+
+  generate: true
