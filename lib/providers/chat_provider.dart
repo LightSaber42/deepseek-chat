@@ -37,6 +37,12 @@ class ChatProvider with ChangeNotifier {
   ChatProvider(this._apiService) : _voiceService = VoiceService() {
     _initServices();
     _initTtsListener();
+    // Set up TTS completion callback
+    _voiceService.setTtsCompleteCallback(() {
+      if (!_voiceService.isListening) {
+        toggleVoiceInput();
+      }
+    });
   }
 
   void _initTtsListener() {
@@ -56,6 +62,10 @@ class ChatProvider with ChangeNotifier {
       _ttsQueue.removeFirst();
     }
     _isProcessingTts = false;
+    // Only trigger the TTS completion callback after all chunks are spoken
+    if (_ttsQueue.isEmpty && !_isProcessingTts) {
+      _voiceService.onTtsQueueComplete();
+    }
   }
 
   @override
@@ -237,6 +247,8 @@ class ChatProvider with ChangeNotifier {
 
   // Add method to stop TTS
   Future<void> stopSpeaking() async {
+    _ttsQueue.clear();
+    _isProcessingTts = false;
     await _voiceService.stopSpeaking();
   }
 
@@ -250,6 +262,14 @@ class ChatProvider with ChangeNotifier {
     settings.useReasoningModel = value;
     await _settingsBox.put(0, settings);
     await _apiService.setModel(value ? 'deepseek-reasoner' : 'deepseek-chat');
+    notifyListeners();
+  }
+
+  void clearMessages() {
+    _messages = [];
+    _ttsQueue.clear();
+    _isProcessingTts = false;
+    _voiceService.stopSpeaking();
     notifyListeners();
   }
 }

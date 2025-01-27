@@ -21,6 +21,11 @@ class ChatScreen extends StatelessWidget {
         ),
         actions: [
           IconButton(
+            icon: const Icon(Icons.add),
+            tooltip: 'New Conversation',
+            onPressed: () => Provider.of<ChatProvider>(context, listen: false).clearMessages(),
+          ),
+          IconButton(
             icon: const Icon(Icons.network_check),
             onPressed: () => _testConnection(context),
           ),
@@ -88,12 +93,19 @@ class ChatScreen extends StatelessWidget {
               },
             ),
           ),
-          SizedBox(width: 8),
+          SizedBox(width: 16),
           Consumer<ChatProvider>(
-            builder: (context, provider, _) => FloatingActionButton(
-              onPressed: () => provider.toggleVoiceInput(),
-              backgroundColor: provider.isListening ? Colors.red : null,
-              child: Icon(provider.isListening ? Icons.mic_off : Icons.mic),
+            builder: (context, provider, _) => SizedBox(
+              width: 120,  // Increased from 80 to 120
+              height: 120, // Increased from 80 to 120
+              child: FloatingActionButton(
+                onPressed: () => provider.toggleVoiceInput(),
+                backgroundColor: provider.isListening ? Colors.red : Theme.of(context).colorScheme.primaryContainer,
+                child: Icon(
+                  provider.isListening ? Icons.mic_off : Icons.mic,
+                  size: 60,  // Increased from 40 to 60
+                ),
+              ),
             ),
           ),
         ],

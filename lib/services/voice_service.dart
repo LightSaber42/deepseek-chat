@@ -10,6 +10,7 @@ class VoiceService {
   bool _isListening = false;
   bool _isSpeaking = false;
   bool _isMuted = false;
+  Function? _onTtsComplete;
 
   bool get isListening => _isListening;
   bool get isSpeaking => _isSpeaking;
@@ -69,9 +70,14 @@ class VoiceService {
         debugPrint('[TTS] Speech status: $status');
         if (status == 'notListening') {
           _isListening = false;
+        } else if (status == 'listening') {
+          _isListening = true;
         }
       },
-      onError: (error) => debugPrint('[TTS] Speech recognition error: $error'),
+      onError: (error) {
+        debugPrint('[TTS] Speech recognition error: $error');
+        _isListening = false;
+      },
     );
 
     if (!available) {
@@ -92,11 +98,13 @@ class VoiceService {
     _tts.setCompletionHandler(() {
       debugPrint('[TTS] Completed speaking');
       _isSpeaking = false;
+      _onTtsComplete?.call();
     });
 
     _tts.setErrorHandler((msg) {
       debugPrint('[TTS] TTS error: $msg');
       _isSpeaking = false;
+      _onTtsComplete?.call();
     });
 
     debugPrint('[TTS] Voice services initialized successfully');
@@ -105,25 +113,43 @@ class VoiceService {
 
   Future<void> startListening(void Function(String) onResult) async {
     if (!_speech.isAvailable) {
+      debugPrint('[TTS] Speech recognition not available');
       throw Exception('Speech recognition not available');
     }
     if (_isMuted) {
+      debugPrint('[TTS] Cannot start listening - microphone is muted');
       throw Exception('Microphone is muted');
     }
+    if (_isListening) {
+      debugPrint('[TTS] Already listening');
+      return;
+    }
 
-    _isListening = true;
-    await _speech.listen(
-      onResult: (result) {
-        if (result.finalResult) {
-          onResult(result.recognizedWords);
-        }
-      },
-      listenMode: ListenMode.dictation,
-      partialResults: false,
-    );
+    try {
+      debugPrint('[TTS] Starting speech recognition');
+      await _speech.listen(
+        onResult: (result) {
+          if (result.finalResult) {
+            debugPrint('[TTS] Final result received: ${result.recognizedWords}');
+            onResult(result.recognizedWords);
+          }
+        },
+        listenMode: ListenMode.dictation,
+        partialResults: false,
+      );
+    } catch (e) {
+      debugPrint('[TTS] Error starting speech recognition: $e');
+      _isListening = false;
+      rethrow;
+    }
   }
 
   Future<void> stopListening() async {
+    if (!_isListening) {
+      debugPrint('[TTS] Not listening - no need to stop');
+      return;
+    }
+    debugPrint('[TTS] Stopping speech recognition');
     await _speech.stop();
     _isListening = false;
   }
@@ -161,5 +187,16 @@ class VoiceService {
   Future<void> stopSpeaking() async {
     await _tts.stop();
     _isSpeaking = false;
+  }
+
+  void setTtsCompleteCallback(Function callback) {
+    _onTtsComplete = callback;
+  }
+
+  void onTtsQueueComplete() {
+    debugPrint('[TTS] All queued text has been spoken');
+    if (!_isMuted) {
+      _onTtsComplete?.call();
+    }
   }
 }
