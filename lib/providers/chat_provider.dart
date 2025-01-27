@@ -214,22 +214,25 @@ class ChatProvider with ChangeNotifier {
         _messages.last.content = displayBuffer;
         notifyListeners();
 
-        // Accumulate for TTS
-        ttsBuffer += content;
+        // Only add to TTS if it's not a reasoning content
+        if (!content.startsWith('[Thinking]')) {
+          // Accumulate for TTS
+          ttsBuffer += content;
 
-        // Handle initial chunk with natural breaks
-        if (!initialChunkSent && ttsBuffer.length >= initialChunkSize) {
-          final splitIndex = _findSplitIndex(ttsBuffer, initialChunkSize);
-          _ttsController.add(ttsBuffer.substring(0, splitIndex));
-          ttsBuffer = ttsBuffer.substring(splitIndex);
-          initialChunkSent = true;
-        }
+          // Handle initial chunk with natural breaks
+          if (!initialChunkSent && ttsBuffer.length >= initialChunkSize) {
+            final splitIndex = _findSplitIndex(ttsBuffer, initialChunkSize);
+            _ttsController.add(ttsBuffer.substring(0, splitIndex));
+            ttsBuffer = ttsBuffer.substring(splitIndex);
+            initialChunkSent = true;
+          }
 
-        // Handle subsequent chunks with natural breaks
-        if (initialChunkSent && ttsBuffer.length >= subsequentChunkSize) {
-          final splitIndex = _findSplitIndex(ttsBuffer, subsequentChunkSize);
-          _ttsController.add(ttsBuffer.substring(0, splitIndex));
-          ttsBuffer = ttsBuffer.substring(splitIndex);
+          // Handle subsequent chunks with natural breaks
+          if (initialChunkSent && ttsBuffer.length >= subsequentChunkSize) {
+            final splitIndex = _findSplitIndex(ttsBuffer, subsequentChunkSize);
+            _ttsController.add(ttsBuffer.substring(0, splitIndex));
+            ttsBuffer = ttsBuffer.substring(splitIndex);
+          }
         }
       }
 

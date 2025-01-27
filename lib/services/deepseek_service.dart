@@ -1,17 +1,24 @@
-import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:http/http.dart' as http;
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 
 class DeepSeekService {
-  static const String _baseUrl = 'https://api.deepseek.com';
   String _apiKey;
-  String _model = 'deepseek-chat';  // Default model
+  final String _baseUrl;
+  String _model;
+  final StreamController<String> _streamController = StreamController<String>.broadcast();
 
   String get apiKey => _apiKey;
   String get currentModel => _model;
 
-  DeepSeekService(this._apiKey) {
+  DeepSeekService({
+    required String apiKey,
+    required String baseUrl,
+    String model = 'deepseek-chat',
+  })  : _apiKey = apiKey,
+        _baseUrl = baseUrl,
+        _model = model {
     debugPrint('DeepSeekService initialized with API key length: ${_apiKey.length}');
   }
 
@@ -25,7 +32,6 @@ class DeepSeekService {
 
   Future<void> updateApiKey(String newApiKey) async {
     _apiKey = newApiKey;
-    // Test the new key
     final isValid = await testConnection();
     if (!isValid) {
       throw Exception('Invalid API key');
@@ -34,7 +40,7 @@ class DeepSeekService {
 
   Future<String?> getAccountBalance() async {
     try {
-      final uri = Uri.parse('${_baseUrl}/v1/dashboard/billing/credit_grants');
+      final uri = Uri.parse('${_baseUrl}/dashboard/billing/credit_grants');
       debugPrint('Fetching balance from: $uri');
 
       final response = await http.get(
@@ -61,83 +67,101 @@ class DeepSeekService {
     }
   }
 
-  String _parseContent(String line) {
-    try {
-      if (line.trim() == 'data: [DONE]') {
-        return '';
-      }
-
-      final jsonData = json.decode(line.substring(5));
-      String content = '';
-      if (jsonData['choices']?[0]?['delta']?['content'] != null) {
-        content = jsonData['choices'][0]['delta']['content'];
-      } else if (jsonData['choices']?[0]?['delta']?['reasoning_content'] != null) {
-        content = '[Reasoning] ' + jsonData['choices'][0]['delta']['reasoning_content'];
-      }
-
-      return content;
-    } catch (e) {
-      debugPrint('[Error] Failed to parse content: $e');
-      return '';
-    }
-  }
-
-  Stream<String> _processStream(Stream<List<int>> stream, http.Client client) {
-    return stream
-        .transform(utf8.decoder)
-        .transform(const LineSplitter())
-        .where((line) => line.trim().startsWith('data:'))
-        .map((line) => _parseContent(line))
-        .where((content) => content.isNotEmpty)
-        .handleError((error) {
-          debugPrint('[Error] Stream processing failed: $error');
-          client.close();
-          throw error;
-        });
-  }
+  Stream<String> get stream => _streamController.stream;
 
   Future<Stream<String>> sendMessage(List<Map<String, dynamic>> history) async {
-    final uri = Uri.parse('${_baseUrl}/v1/chat/completions');
-
     try {
-      final client = http.Client();
-      final request = http.Request('POST', uri);
-      request.headers.addAll({
-        'Authorization': 'Bearer $_apiKey',
-        'Content-Type': 'application/json',
-        'Accept': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-      });
+      debugPrint('[API] Sending request to DeepSeek');
 
+      final uri = Uri.parse('${_baseUrl}/chat/completions');
       final body = {
         'model': _model,
         'messages': history,
         'stream': true,
-        'max_tokens': 4096,
-        'temperature': 0.7,
       };
+
+      debugPrint('[API] Request body: ${json.encode(body)}');
+
+      final request = http.Request('POST', uri);
+      request.headers['Authorization'] = 'Bearer $_apiKey';
+      request.headers['Content-Type'] = 'application/json';
       request.body = json.encode(body);
 
-      final response = await client.send(request);
+      final response = await http.Client().send(request);
+      debugPrint('[API] Response status: ${response.statusCode}');
 
       if (response.statusCode != 200) {
-        final errorBody = await response.stream.bytesToString();
-        debugPrint('[Error] API request failed (${response.statusCode}): $errorBody');
-        throw Exception('API request failed');
+        final body = await response.stream.bytesToString();
+        throw Exception('API request failed: $body');
       }
 
-      return _processStream(response.stream, client);
+      // Create a new StreamController for this request
+      final localController = StreamController<String>();
+
+      // Convert the response stream to a string stream
+      final stream = response.stream
+          .transform(utf8.decoder)
+          .transform(const LineSplitter());
+
+      // Process the stream
+      stream.listen(
+        (String line) {
+          if (line.startsWith('data: ')) {
+            final data = line.substring(6).trim();
+            if (data == '[DONE]') {
+              debugPrint('[API] Received [DONE] signal');
+              localController.close();
+              return;
+            }
+
+            try {
+              final jsonData = json.decode(data);
+              String? content;
+
+              if (jsonData['choices']?[0]?['delta']?['reasoning_content'] != null) {
+                content = '[Reasoning] ${jsonData['choices'][0]['delta']['reasoning_content']}';
+                debugPrint('[API] Reasoning content: $content');
+              } else if (jsonData['choices']?[0]?['delta']?['content'] != null) {
+                content = jsonData['choices'][0]['delta']['content'];
+                debugPrint('[API] Response content: $content');
+              }
+
+              if (content != null && content.isNotEmpty) {
+                localController.add(content);
+              }
+            } catch (e) {
+              debugPrint('[Error] Failed to parse chunk: $e');
+            }
+          }
+        },
+        onError: (error) {
+          debugPrint('[Error] Stream error: $error');
+          localController.addError(error);
+          localController.close();
+        },
+        onDone: () {
+          debugPrint('[API] Stream processing completed');
+          if (!localController.isClosed) {
+            localController.close();
+          }
+        },
+        cancelOnError: true,
+      );
+
+      return localController.stream;
     } catch (e) {
-      debugPrint('[Error] Failed to send message: $e');
+      debugPrint('[Error] Full error details: ${e.toString()}');
       rethrow;
     }
   }
 
   Future<bool> testConnection() async {
     try {
-      final uri = Uri.parse('${_baseUrl}/v1/chat/completions');
-      debugPrint('Testing connection to: $uri');
+      final uri = Uri.parse('${_baseUrl}/chat/completions');
+      final body = {
+        'model': _model,
+        'messages': [{'role': 'user', 'content': 'Hello'}],
+      };
 
       final response = await http.post(
         uri,
@@ -145,21 +169,20 @@ class DeepSeekService {
           'Authorization': 'Bearer $_apiKey',
           'Content-Type': 'application/json',
         },
-        body: json.encode({
-          'model': 'deepseek-chat',
-          'messages': [{'role': 'user', 'content': 'Hello'}],
-          'max_tokens': 50,
-          'stream': false,
-        }),
+        body: json.encode(body),
       );
 
-      debugPrint('Test connection status code: ${response.statusCode}');
-      debugPrint('Test connection response: ${response.body}');
+      debugPrint('[API] Test connection status: ${response.statusCode}');
+      debugPrint('[API] Test connection response: ${response.body}');
 
       return response.statusCode == 200;
     } catch (e) {
       debugPrint('Error testing connection: $e');
       return false;
     }
+  }
+
+  void dispose() {
+    _streamController.close();
   }
 }
