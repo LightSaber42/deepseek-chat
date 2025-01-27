@@ -13,6 +13,10 @@ class ChatScreen extends StatelessWidget {
         title: const Text('DeepSeek Chat'),
         actions: [
           IconButton(
+            icon: const Icon(Icons.network_check),
+            onPressed: () => _testConnection(context),
+          ),
+          IconButton(
             icon: const Icon(Icons.history),
             onPressed: () => _showSessionHistory(context),
           ),
@@ -45,7 +49,7 @@ class ChatScreen extends StatelessWidget {
 
   Widget _buildInputControls(BuildContext context) {
     final provider = Provider.of<ChatProvider>(context, listen: false);
-    
+
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: Row(
@@ -64,15 +68,12 @@ class ChatScreen extends StatelessWidget {
             ),
           ),
           SizedBox(width: 8),
-          FloatingActionButton(
-            onPressed: () async {
-              // TODO: Implement voice input
-              // final transcript = await provider.startVoiceInput();
-              // if (transcript != null) {
-              //   provider.sendMessage(transcript);
-              // }
-            },
-            child: Icon(Icons.mic),
+          Consumer<ChatProvider>(
+            builder: (context, provider, _) => FloatingActionButton(
+              onPressed: () => provider.toggleVoiceInput(),
+              backgroundColor: provider.isListening ? Colors.red : null,
+              child: Icon(provider.isListening ? Icons.mic_off : Icons.mic),
+            ),
           ),
         ],
       ),
@@ -81,5 +82,19 @@ class ChatScreen extends StatelessWidget {
 
   void _showSessionHistory(BuildContext context) {
     // TODO: Implement session history
+  }
+
+  void _testConnection(BuildContext context) async {
+    final provider = Provider.of<ChatProvider>(context, listen: false);
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+
+    final isConnected = await provider.testApiConnection();
+
+    scaffoldMessenger.showSnackBar(
+      SnackBar(
+        content: Text(isConnected ? 'API Connection Successful' : 'API Connection Failed'),
+        backgroundColor: isConnected ? Colors.green : Colors.red,
+      ),
+    );
   }
 }
