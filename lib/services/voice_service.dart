@@ -11,6 +11,7 @@ class VoiceService {
   bool _isSpeaking = false;
   bool _isMuted = false;
   Function? _onTtsComplete;
+  bool _isProcessingLastChunk = false;
 
   bool get isListening => _isListening;
   bool get isSpeaking => _isSpeaking;
@@ -96,15 +97,19 @@ class VoiceService {
     });
 
     _tts.setCompletionHandler(() {
-      debugPrint('[TTS] Completed speaking');
+      debugPrint('[TTS] Completed speaking chunk');
       _isSpeaking = false;
-      _onTtsComplete?.call();
+      if (_isProcessingLastChunk) {
+        debugPrint('[TTS] This was the last chunk, triggering completion');
+        _isProcessingLastChunk = false;
+        onTtsQueueComplete();
+      }
     });
 
     _tts.setErrorHandler((msg) {
       debugPrint('[TTS] TTS error: $msg');
       _isSpeaking = false;
-      _onTtsComplete?.call();
+      _isProcessingLastChunk = false;
     });
 
     debugPrint('[TTS] Voice services initialized successfully');
@@ -154,7 +159,7 @@ class VoiceService {
     _isListening = false;
   }
 
-  Future<void> speak(String text) async {
+  Future<void> speak(String text, {bool isLastChunk = false}) async {
     if (text.trim().isEmpty) {
       debugPrint('[TTS] Skipping empty text');
       return;
@@ -176,6 +181,10 @@ class VoiceService {
         await _tts.awaitSpeakCompletion(true);
       }
 
+      // Set the last chunk flag before starting to speak
+      _isProcessingLastChunk = isLastChunk;
+      debugPrint(isLastChunk ? '[TTS] Processing last chunk' : '[TTS] Processing intermediate chunk');
+
       _isSpeaking = true;
       await _tts.speak(cleanText);
       // Wait for the speech to complete
@@ -183,10 +192,12 @@ class VoiceService {
     } catch (e) {
       debugPrint('[TTS] Error in TTS: $e');
       _isSpeaking = false;
+      _isProcessingLastChunk = false;
     }
   }
 
   Future<void> stopSpeaking() async {
+    _isProcessingLastChunk = false;  // Reset the flag when stopping
     await _tts.stop();
     _isSpeaking = false;
   }

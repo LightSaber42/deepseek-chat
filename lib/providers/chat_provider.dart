@@ -24,6 +24,7 @@ class ChatProvider with ChangeNotifier {
   StreamSubscription<String>? _ttsSubscription;
   final Queue<String> _ttsQueue = Queue<String>();
   bool _isProcessingTts = false;
+  bool _isLastChunk = false;
 
   bool get isResponding => _isResponding;
   bool get isListening => _voiceService.isListening;
@@ -59,16 +60,13 @@ class ChatProvider with ChangeNotifier {
     try {
       while (_ttsQueue.isNotEmpty) {
         final text = _ttsQueue.first;
-        await _voiceService.speak(text);
+        final isLastItem = _ttsQueue.length == 1 && _isLastChunk;
+        await _voiceService.speak(text, isLastChunk: isLastItem);
         _ttsQueue.removeFirst();
-      }
-      // Only trigger completion after all chunks are successfully spoken
-      if (_ttsQueue.isEmpty) {
-        debugPrint('[Chat] All TTS chunks completed, triggering completion');
-        _voiceService.onTtsQueueComplete();
       }
     } finally {
       _isProcessingTts = false;
+      _isLastChunk = false;
     }
   }
 
@@ -178,6 +176,7 @@ class ChatProvider with ChangeNotifier {
   Future<void> sendMessage(String text) async {
     try {
       _isResponding = true;
+      _isLastChunk = false;
       notifyListeners();
 
       final userMessage = ChatMessage(role: 'user', content: text);
@@ -231,6 +230,7 @@ class ChatProvider with ChangeNotifier {
 
       // Process any remaining content
       if (ttsBuffer.isNotEmpty) {
+        _isLastChunk = true;
         _ttsController.add(ttsBuffer);
       }
 
@@ -240,6 +240,7 @@ class ChatProvider with ChangeNotifier {
       debugPrint('[Error] Failed to get response: $e');
       _messages = [..._messages, ChatMessage(role: 'assistant', content: 'Error: Failed to get response from API')];
       _isResponding = false;
+      _isLastChunk = false;
       notifyListeners();
     }
   }

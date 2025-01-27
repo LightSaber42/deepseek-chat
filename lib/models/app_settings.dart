@@ -21,7 +21,7 @@ class AppSettings extends HiveObject {
 
   factory AppSettings.defaults() {
     return AppSettings(
-      systemPrompt: '',
+      systemPrompt: 'You having a voice conversation with a user. Please use conversational style and avoid complex formatting. Keep the discussion interactive and refrain from very long monologues. If the user asks for more information, make you responses longer.',
       apiKey: '',
       useReasoningModel: false,
     );
