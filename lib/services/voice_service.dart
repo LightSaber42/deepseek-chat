@@ -12,6 +12,7 @@ class VoiceService {
   bool _isMuted = false;
   Function? _onTtsComplete;
   bool _isProcessingLastChunk = false;
+  Function? _onStateChange;
 
   bool get isListening => _isListening;
   bool get isSpeaking => _isSpeaking;
@@ -69,15 +70,21 @@ class VoiceService {
     bool available = await _speech.initialize(
       onStatus: (status) {
         debugPrint('[TTS] Speech status: $status');
-        if (status == 'notListening') {
+        bool wasListening = _isListening;
+        if (status == 'notListening' || status == 'done') {
           _isListening = false;
         } else if (status == 'listening') {
           _isListening = true;
+        }
+        // Notify if state changed
+        if (wasListening != _isListening) {
+          _onStateChange?.call();
         }
       },
       onError: (error) {
         debugPrint('[TTS] Speech recognition error: $error');
         _isListening = false;
+        _onStateChange?.call();
       },
     );
 
@@ -211,5 +218,9 @@ class VoiceService {
     if (!_isMuted) {
       _onTtsComplete?.call();
     }
+  }
+
+  void setStateChangeCallback(Function callback) {
+    _onStateChange = callback;
   }
 }

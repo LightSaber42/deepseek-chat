@@ -44,6 +44,11 @@ class ChatProvider with ChangeNotifier {
         toggleVoiceInput();
       }
     });
+    // Set up state change callback
+    _voiceService.setStateChangeCallback(() {
+      debugPrint('[Chat] Voice service state changed, notifying listeners');
+      notifyListeners();
+    });
   }
 
   void _initTtsListener() {
