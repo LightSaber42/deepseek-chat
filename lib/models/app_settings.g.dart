@@ -8,7 +8,7 @@ part of 'app_settings.dart';
 
 class AppSettingsAdapter extends TypeAdapter<AppSettings> {
   @override
-  final int typeId = 3;
+  final int typeId = 0;
 
   @override
   AppSettings read(BinaryReader reader) {
@@ -17,22 +17,31 @@ class AppSettingsAdapter extends TypeAdapter<AppSettings> {
       for (int i = 0; i < numOfFields; i++) reader.readByte(): reader.read(),
     };
     return AppSettings(
-      systemPrompt: fields[0] as String,
-      apiKey: fields[1] as String,
+      apiKey: fields[0] as String,
+      systemPrompt: fields[1] as String,
       useReasoningModel: fields[2] as bool,
+      selectedModel: fields[3] as String,
+      openrouterApiKey: fields[4] as String,
+      customOpenrouterModel: fields[5] as String,
     );
   }
 
   @override
   void write(BinaryWriter writer, AppSettings obj) {
     writer
-      ..writeByte(3)
+      ..writeByte(6)
       ..writeByte(0)
-      ..write(obj.systemPrompt)
-      ..writeByte(1)
       ..write(obj.apiKey)
+      ..writeByte(1)
+      ..write(obj.systemPrompt)
       ..writeByte(2)
-      ..write(obj.useReasoningModel);
+      ..write(obj.useReasoningModel)
+      ..writeByte(3)
+      ..write(obj.selectedModel)
+      ..writeByte(4)
+      ..write(obj.openrouterApiKey)
+      ..writeByte(5)
+      ..write(obj.customOpenrouterModel);
   }
 
   @override

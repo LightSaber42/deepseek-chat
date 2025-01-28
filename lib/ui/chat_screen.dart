@@ -11,7 +11,19 @@ class ChatScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('DeepSeek Chat'),
+        title: Consumer<ChatProvider>(
+          builder: (context, provider, _) {
+            String modelName = switch (provider.selectedModel) {
+              'deepseek-chat' => 'DeepSeek Chat',
+              'deepseek-reasoner' => 'DeepSeek Reasoner',
+              'openrouter-deepseek-r1' => 'DeepSeek R1 (OpenRouter)',
+              'openrouter-deepseek-r1-distill' => 'DeepSeek R1 Distill (OpenRouter)',
+              'openrouter-custom' => 'Custom Model (OpenRouter)',
+              _ => 'Chat',
+            };
+            return Text(modelName);
+          },
+        ),
         leading: IconButton(
           icon: const Icon(Icons.menu),
           onPressed: () => Navigator.push(
@@ -122,10 +134,11 @@ class ChatScreen extends StatelessWidget {
     final scaffoldMessenger = ScaffoldMessenger.of(context);
 
     final isConnected = await provider.testApiConnection();
+    final serviceName = provider.selectedModel.startsWith('openrouter') ? 'OpenRouter' : 'DeepSeek';
 
     scaffoldMessenger.showSnackBar(
       SnackBar(
-        content: Text(isConnected ? 'API Connection Successful' : 'API Connection Failed'),
+        content: Text('$serviceName API Connection ${isConnected ? 'Successful' : 'Failed'}'),
         backgroundColor: isConnected ? Colors.green : Colors.red,
       ),
     );

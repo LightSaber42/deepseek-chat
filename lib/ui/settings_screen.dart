@@ -12,7 +12,10 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   final _systemPromptController = TextEditingController();
   final _apiKeyController = TextEditingController();
+  final _openrouterApiKeyController = TextEditingController();
+  final _customModelController = TextEditingController();
   bool _obscureApiKey = true;
+  bool _obscureOpenRouterApiKey = true;
 
   @override
   void initState() {
@@ -20,12 +23,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final provider = Provider.of<ChatProvider>(context, listen: false);
     _systemPromptController.text = provider.systemPrompt;
     _apiKeyController.text = provider.apiKey;
+    _openrouterApiKeyController.text = provider.openrouterApiKey;
+    _customModelController.text = provider.customOpenrouterModel;
   }
 
   @override
   void dispose() {
     _systemPromptController.dispose();
     _apiKeyController.dispose();
+    _openrouterApiKeyController.dispose();
+    _customModelController.dispose();
     super.dispose();
   }
 
@@ -62,43 +69,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 24),
             const Text(
-              'API Key',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _apiKeyController,
-                    obscureText: _obscureApiKey,
-                    decoration: InputDecoration(
-                      hintText: 'Enter DeepSeek API key...',
-                      border: const OutlineInputBorder(),
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          _obscureApiKey ? Icons.visibility : Icons.visibility_off,
-                        ),
-                        onPressed: () {
-                          setState(() {
-                            _obscureApiKey = !_obscureApiKey;
-                          });
-                        },
-                      ),
-                    ),
-                    onChanged: (value) {
-                      Provider.of<ChatProvider>(context, listen: false)
-                          .updateApiKey(value);
-                    },
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 24),
-            const Text(
               'Model Selection',
               style: TextStyle(
                 fontSize: 18,
@@ -107,18 +77,120 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 8),
             Consumer<ChatProvider>(
-              builder: (context, provider, _) => SwitchListTile(
-                title: const Text('Use Reasoning Model'),
-                subtitle: Text(
-                  provider.useReasoningModel
-                      ? 'Using deepseek-reasoner (shows reasoning steps)'
-                      : 'Using deepseek-chat (faster responses)',
-                ),
-                value: provider.useReasoningModel,
-                onChanged: (bool value) {
-                  provider.updateUseReasoningModel(value);
-                },
+              builder: (context, provider, _) => Column(
+                children: [
+                  DropdownButtonFormField<String>(
+                    value: provider.selectedModel,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: 'Select Model',
+                    ),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'deepseek-chat',
+                        child: Text('DeepSeek Chat'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'deepseek-reasoner',
+                        child: Text('DeepSeek Reasoner'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'openrouter-deepseek-r1',
+                        child: Text('OpenRouter - DeepSeek R1'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'openrouter-deepseek-r1-distill',
+                        child: Text('OpenRouter - DeepSeek R1 Distill (70B)'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'openrouter-custom',
+                        child: Text('OpenRouter - Custom Model'),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) {
+                        provider.updateSelectedModel(value);
+                      }
+                    },
+                  ),
+                  if (provider.selectedModel == 'openrouter-custom')
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8.0),
+                      child: TextField(
+                        controller: _customModelController,
+                        decoration: const InputDecoration(
+                          hintText: 'Enter custom OpenRouter model name...',
+                          border: OutlineInputBorder(),
+                        ),
+                        onChanged: (value) {
+                          provider.updateCustomOpenrouterModel(value);
+                        },
+                      ),
+                    ),
+                ],
               ),
+            ),
+            const SizedBox(height: 24),
+            const Text(
+              'DeepSeek API Key',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _apiKeyController,
+              obscureText: _obscureApiKey,
+              decoration: InputDecoration(
+                hintText: 'Enter DeepSeek API key...',
+                border: const OutlineInputBorder(),
+                suffixIcon: IconButton(
+                  icon: Icon(
+                    _obscureApiKey ? Icons.visibility : Icons.visibility_off,
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      _obscureApiKey = !_obscureApiKey;
+                    });
+                  },
+                ),
+              ),
+              onChanged: (value) {
+                Provider.of<ChatProvider>(context, listen: false)
+                    .updateApiKey(value);
+              },
+            ),
+            const SizedBox(height: 24),
+            const Text(
+              'OpenRouter API Key',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _openrouterApiKeyController,
+              obscureText: _obscureOpenRouterApiKey,
+              decoration: InputDecoration(
+                hintText: 'Enter OpenRouter API key...',
+                border: const OutlineInputBorder(),
+                suffixIcon: IconButton(
+                  icon: Icon(
+                    _obscureOpenRouterApiKey ? Icons.visibility : Icons.visibility_off,
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      _obscureOpenRouterApiKey = !_obscureOpenRouterApiKey;
+                    });
+                  },
+                ),
+              ),
+              onChanged: (value) {
+                Provider.of<ChatProvider>(context, listen: false)
+                    .updateOpenRouterApiKey(value);
+              },
             ),
             const SizedBox(height: 24),
             Consumer<ChatProvider>(

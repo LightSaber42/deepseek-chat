@@ -4,27 +4,20 @@ import 'chat_message.dart';
 
 part 'chat_session.g.dart';
 
-@HiveType(typeId: 1)
+@HiveType(typeId: 2)
 class ChatSession extends HiveObject {
   @HiveField(0)
-  final String sessionId;
+  final String id;
 
   @HiveField(1)
-  final List<ChatMessage> messages;
+  final DateTime timestamp;
 
   @HiveField(2)
-  final DateTime created;
-
-  @HiveField(3)
-  DateTime lastModified;
+  final List<ChatMessage> messages;
 
   ChatSession({
-    String? sessionId,
-    List<ChatMessage>? messages,
-    DateTime? created,
-    DateTime? lastModified,
-  }) : sessionId = sessionId ?? const Uuid().v4(),
-       messages = messages ?? [],
-       created = created ?? DateTime.now(),
-       lastModified = lastModified ?? DateTime.now();
+    required this.id,
+    required this.timestamp,
+    required this.messages,
+  });
 }

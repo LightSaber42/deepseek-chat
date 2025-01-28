@@ -6,6 +6,7 @@ import 'models/app_settings.dart';
 import 'models/chat_message.dart';
 import 'models/chat_session.dart';
 import 'services/deepseek_service.dart';
+import 'services/openrouter_service.dart';
 import 'services/voice_service.dart';
 import 'providers/chat_provider.dart';
 import 'ui/chat_screen.dart';
@@ -17,24 +18,39 @@ void main() async {
   // Initialize Hive
   await Hive.initFlutter();
 
-  // Register Hive adapters
-  Hive.registerAdapter(AppSettingsAdapter());
-  Hive.registerAdapter(ChatMessageAdapter());
-  Hive.registerAdapter(ChatSessionAdapter());
+  // Register Hive adapters if not already registered
+  if (!Hive.isAdapterRegistered(0)) {
+    Hive.registerAdapter(AppSettingsAdapter());
+  }
+  if (!Hive.isAdapterRegistered(1)) {
+    Hive.registerAdapter(ChatMessageAdapter());
+  }
+  if (!Hive.isAdapterRegistered(2)) {
+    Hive.registerAdapter(ChatSessionAdapter());
+  }
 
   // Load environment variables
   await dotenv.load();
 
-  // Get API key from environment
-  final apiKey = dotenv.env['DEEPSEEK_API_KEY'] ?? '';
+  // Get API keys from environment
+  final deepseekApiKey = dotenv.env['DEEPSEEK_API_KEY'] ?? '';
+  final openrouterApiKey = dotenv.env['OPENROUTER_API_KEY'] ?? '';
 
-  runApp(MyApp(apiKey: apiKey));
+  runApp(MyApp(
+    deepseekApiKey: deepseekApiKey,
+    openrouterApiKey: openrouterApiKey,
+  ));
 }
 
 class MyApp extends StatelessWidget {
-  final String apiKey;
+  final String deepseekApiKey;
+  final String openrouterApiKey;
 
-  const MyApp({Key? key, required this.apiKey}) : super(key: key);
+  const MyApp({
+    Key? key,
+    required this.deepseekApiKey,
+    required this.openrouterApiKey,
+  }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
@@ -44,10 +60,11 @@ class MyApp extends StatelessWidget {
           apiKey: const String.fromEnvironment('DEEPSEEK_API_KEY', defaultValue: ''),
           baseUrl: 'https://api.deepseek.com/v1',
         ),
+        OpenRouterService(),
         VoiceService(),
       ),
       child: MaterialApp(
-        title: 'DeepSeek Chat',
+        title: 'AI Chat',
         theme: ThemeData(
           colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
           useMaterial3: true,

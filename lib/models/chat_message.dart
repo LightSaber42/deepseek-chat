@@ -3,7 +3,7 @@ import 'package:uuid/uuid.dart';
 
 part 'chat_message.g.dart';
 
-@HiveType(typeId: 0)
+@HiveType(typeId: 1)
 class ChatMessage extends HiveObject {
   @HiveField(0)
   final String id;

@@ -8,7 +8,7 @@ part of 'chat_session.dart';
 
 class ChatSessionAdapter extends TypeAdapter<ChatSession> {
   @override
-  final int typeId = 1;
+  final int typeId = 2;
 
   @override
   ChatSession read(BinaryReader reader) {
@@ -17,25 +17,22 @@ class ChatSessionAdapter extends TypeAdapter<ChatSession> {
       for (int i = 0; i < numOfFields; i++) reader.readByte(): reader.read(),
     };
     return ChatSession(
-      sessionId: fields[0] as String?,
-      messages: (fields[1] as List?)?.cast<ChatMessage>(),
-      created: fields[2] as DateTime?,
-      lastModified: fields[3] as DateTime?,
+      id: fields[0] as String,
+      timestamp: fields[1] as DateTime,
+      messages: (fields[2] as List).cast<ChatMessage>(),
     );
   }
 
   @override
   void write(BinaryWriter writer, ChatSession obj) {
     writer
-      ..writeByte(4)
-      ..writeByte(0)
-      ..write(obj.sessionId)
-      ..writeByte(1)
-      ..write(obj.messages)
-      ..writeByte(2)
-      ..write(obj.created)
       ..writeByte(3)
-      ..write(obj.lastModified);
+      ..writeByte(0)
+      ..write(obj.id)
+      ..writeByte(1)
+      ..write(obj.timestamp)
+      ..writeByte(2)
+      ..write(obj.messages);
   }
 
   @override
