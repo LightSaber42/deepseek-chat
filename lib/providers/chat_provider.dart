@@ -192,6 +192,20 @@ class ChatProvider extends ChangeNotifier {
     }
   }
 
+  // Add method to clear TTS state
+  void clearTtsState() {
+    debugPrint('[Chat] Clearing TTS state');
+    _ttsQueue.clear();
+    _currentTtsBuffer.clear();
+    _isProcessingTts = false;
+    _lastChunkSize = 100; // Reset chunk size
+  }
+
+  Future<void> stopSpeaking() async {
+    clearTtsState();
+    await _voiceService.stopSpeaking();
+  }
+
   @override
   void dispose() {
     _ttsQueue.clear();
@@ -559,13 +573,6 @@ class ChatProvider extends ChangeNotifier {
       debugPrint('Error testing API connection: $e');
       return false;
     }
-  }
-
-  // Add method to stop TTS
-  Future<void> stopSpeaking() async {
-    _ttsQueue.clear();
-    _isProcessingTts = false;
-    await _voiceService.stopSpeaking();
   }
 
   void toggleMute() {

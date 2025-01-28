@@ -206,7 +206,11 @@ class VoiceService {
   Future<void> stopSpeaking() async {
     _isProcessingLastChunk = false;  // Reset the flag when stopping
     await _tts.stop();
+    // Clear any pending speech in the queue
+    await _tts.pause();  // Pause first to ensure we can clear properly
+    await _tts.stop();   // Stop again to clear any queued items
     _isSpeaking = false;
+    _onTtsComplete = null;  // Clear the callback to prevent any pending callbacks
   }
 
   void setTtsCompleteCallback(Function callback) {

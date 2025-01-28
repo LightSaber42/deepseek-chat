@@ -1,0 +1,4 @@
+we are developing a chat frontend for a chatbot to either deepseek or openrouter.
+Voice is the main input method, and TTS the main output method.
+TTS should be smooth and natural.
+When making changes to fix or add something, do not make changes to the code that is already working.  Limit the scope of the changes to the specific issue.
