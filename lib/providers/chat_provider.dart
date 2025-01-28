@@ -153,8 +153,8 @@ class ChatProvider extends ChangeNotifier {
             !remainingText.contains('REASONING_START') &&
             !remainingText.contains('SPLIT_MESSAGE')) {
 
-          // Use the same regex pattern as main chunking
-          final sentenceBreaks = RegExp(r'(?<!\d)[.!?](?:\s+|\n)');
+          // Use a more lenient pattern for the final text that includes sentence endings without spaces
+          final sentenceBreaks = RegExp(r'(?<!\d)[.!?](?:\s+|\n|$)');
           final matches = sentenceBreaks.allMatches(remainingText).toList();
 
           String finalChunk;
@@ -178,10 +178,8 @@ class ChatProvider extends ChangeNotifier {
         _currentTtsBuffer.clear();
       }
 
-      if (_ttsQueue.isEmpty) {
-        debugPrint('[Chat] All TTS chunks completed, triggering completion');
-        _voiceService.onTtsQueueComplete();
-      }
+      debugPrint('[Chat] All TTS chunks completed, triggering completion callback');
+      _onTtsComplete(); // Call directly instead of through voice service
     } finally {
       _isProcessingTts = false;
     }
@@ -592,8 +590,12 @@ class ChatProvider extends ChangeNotifier {
   }
 
   void _onTtsComplete() {
+    debugPrint('[Chat] TTS completion callback triggered');
     if (!_voiceService.isListening) {
+      debugPrint('[Chat] Starting voice input after TTS completion');
       toggleVoiceInput();
+    } else {
+      debugPrint('[Chat] Voice input already active, skipping activation');
     }
   }
 
