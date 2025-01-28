@@ -28,8 +28,8 @@ class ChatProvider extends ChangeNotifier {
   final Queue<String> _ttsQueue = Queue<String>();
   bool _isProcessingTts = false;
   StringBuffer _currentTtsBuffer = StringBuffer();
-  DateTime _lastTtsChunkTime = DateTime.now();
-  int _lastChunkSize = 100; // Initial chunk size
+  DateTime _lastChunkTime = DateTime.now();
+  static const double _charsPerSecond = 10.0;  // Approximate characters per second for TTS
 
   bool get isResponding => _isResponding;
   bool get isListening => _voiceService.isListening;
@@ -77,84 +77,52 @@ class ChatProvider extends ChangeNotifier {
       // Get the current buffered text
       final currentText = _currentTtsBuffer.toString();
 
-      // Always wait for at least 100 chars
-      if (currentText.length < 100) {
-        return; // Keep accumulating text
-      }
+      // For chunks, only break on sentence endings
+      // Negative lookbehind (?<!\d) ensures we don't break on decimal points in numbers
+      final sentenceBreaks = RegExp(r'(?<!\d)[.!?](?:\s+|\n)');
+      final matches = sentenceBreaks.allMatches(currentText).toList();
 
-      // For the first chunk, ensure we have a complete sentence or substantial phrase
-      if (_lastChunkSize == 100) {
-        // Find a good break point for the first chunk
-        final firstBreakPoint = _findBreakPoint(currentText, currentText.length);
-        if (firstBreakPoint >= 100) {  // Only process if we have enough text
-          final firstChunk = currentText.substring(0, firstBreakPoint).trim();
-          if (firstChunk.isNotEmpty && firstChunk.length >= 100) {
-            _ttsQueue.add(firstChunk);
-            _currentTtsBuffer = StringBuffer(currentText.substring(firstBreakPoint));
-            _lastChunkSize = firstChunk.length * 2; // Double the size for next chunk
-            _lastTtsChunkTime = DateTime.now();
-            debugPrint('[Chat] First chunk size: ${firstChunk.length} chars, next target: $_lastChunkSize');
-            _processTtsQueue();
+      // Process if we have at least one sentence break
+      if (matches.isNotEmpty) {
+        if (_ttsQueue.isEmpty) {
+          // For the first chunk, just take the first complete sentence
+          final breakPoint = matches.first.end;
+          final chunk = currentText.substring(0, breakPoint).trim();
+
+          if (chunk.isNotEmpty) {
+            _ttsQueue.add(chunk);
+            _currentTtsBuffer = StringBuffer(currentText.substring(breakPoint));
+            _lastChunkTime = DateTime.now();
+            debugPrint('[Chat] Queuing first sentence (${chunk.length} chars, ~${(chunk.length / _charsPerSecond).toStringAsFixed(1)}s):\n$chunk');
+          }
+        } else {
+          // For subsequent chunks, wait for minimum time based on last chunk
+          final now = DateTime.now();
+          final timeSinceLastChunk = now.difference(_lastChunkTime).inMilliseconds;
+          final lastChunkDuration = (_ttsQueue.last.length / _charsPerSecond * 1000).round();
+
+          // Only process if enough time has passed
+          if (timeSinceLastChunk >= lastChunkDuration) {
+            // Take all complete sentences available
+            final lastBreakPoint = matches.last.end;
+            final chunk = currentText.substring(0, lastBreakPoint).trim();
+
+            if (chunk.isNotEmpty) {
+              final sentenceCount = matches.length;
+              _ttsQueue.add(chunk);
+              _currentTtsBuffer = StringBuffer(currentText.substring(lastBreakPoint));
+              _lastChunkTime = now;
+              debugPrint('[Chat] Queuing large chunk with $sentenceCount sentences (${chunk.length} chars, ~${(chunk.length / _charsPerSecond).toStringAsFixed(1)}s):\n$chunk');
+            }
           }
         }
-        return;
-      }
 
-      // Natural chunking points - only break on strong punctuation and major phrase boundaries
-      final naturalBreaks = RegExp(r'[.!?]\s+|\n|\s+(?=and\s|but\s|however\s|nevertheless\s|conversely\s|meanwhile\s|furthermore\s|moreover\s)');
-
-      // Don't break if we're in the middle of a number or abbreviation
-      final inNumber = RegExp(r'\d+\.\d+$');
-      final inAbbreviation = RegExp(r'[A-Z]\.$');
-
-      // Check if we should flush based on conditions - removed timeout condition
-      bool shouldFlush = currentText.length >= _lastChunkSize ||
-                        (naturalBreaks.hasMatch(currentText) &&
-                         !inNumber.hasMatch(currentText) &&
-                         !inAbbreviation.hasMatch(currentText) &&
-                         currentText.length >= max(100, _lastChunkSize));
-
-      if (shouldFlush && _currentTtsBuffer.isNotEmpty) {
-        final breakPoint = _findBreakPoint(currentText, currentText.length);
-        if (breakPoint >= 100) {  // Only process if we have enough text
-          final chunk = currentText.substring(0, breakPoint).trim();
-          if (chunk.isNotEmpty && chunk.length >= 100) {
-            _ttsQueue.add(chunk);
-            // Double the target size for next chunk, but don't exceed all remaining text
-            _lastChunkSize = min(chunk.length * 2, currentText.length);
-            _currentTtsBuffer = StringBuffer(currentText.substring(breakPoint));
-            _lastTtsChunkTime = DateTime.now();
-            debugPrint('[Chat] Chunk size: ${chunk.length} chars, next target: $_lastChunkSize');
-            _processTtsQueue();
-          }
+        // Start processing if not already processing
+        if (!_isProcessingTts) {
+          _processTtsQueue();
         }
       }
     });
-  }
-
-  // Helper method to find a good break point in text
-  int _findBreakPoint(String text, int targetLength) {
-    // First try to find a sentence end near target length
-    final sentenceEnd = text.lastIndexOf(RegExp(r'[.!?]\s+'), targetLength);
-    if (sentenceEnd != -1 && sentenceEnd >= 100) {
-      return sentenceEnd + 1;
-    }
-
-    // Then try to find a comma or conjunction near target length
-    final phraseBoundary = text.lastIndexOf(RegExp(r',\s+|\s+(?=and\s|but\s|or\s)'), targetLength);
-    if (phraseBoundary != -1 && phraseBoundary >= 100) {
-      return phraseBoundary + 1;
-    }
-
-    // If we have enough text but no good break point, look for any break point after 100 chars
-    final anyBreak = text.lastIndexOf(RegExp(r'[.!?,]\s+|\s+(?=and\s|but\s|or\s)'), targetLength);
-    if (anyBreak != -1 && anyBreak >= 100) {
-      return anyBreak + 1;
-    }
-
-    // Finally, just find the last space after minimum length
-    final lastSpace = text.lastIndexOf(' ', targetLength);
-    return lastSpace != -1 && lastSpace >= 100 ? lastSpace : max(100, targetLength);
   }
 
   void _processTtsQueue() async {
@@ -166,21 +134,48 @@ class ChatProvider extends ChangeNotifier {
         final text = _ttsQueue.first;
         // Only speak non-reasoning content
         if (!text.contains('REASONING_START') && !text.contains('SPLIT_MESSAGE')) {
-          debugPrint('[Chat] Speaking phrase (${text.length} chars): ${text.substring(0, min(50, text.length))}...');
-          await _voiceService.speak(text);
-          await Future.delayed(const Duration(milliseconds: 50)); // Shorter pause between chunks
+          final expectedDuration = (text.length / _charsPerSecond).toStringAsFixed(1);
+          debugPrint('[Chat] Speaking chunk (${text.length} chars, ~${expectedDuration}s):\n$text');
+
+          try {
+            await _voiceService.speak(text);
+          } catch (e) {
+            debugPrint('[Chat] Error during TTS: $e');
+          }
         }
         _ttsQueue.removeFirst();
       }
 
-      // Speak any remaining buffered content
+      // Handle any remaining buffered content
       if (_currentTtsBuffer.isNotEmpty) {
-        final remainingText = _currentTtsBuffer.toString();
-        _currentTtsBuffer.clear();
-        if (!remainingText.contains('REASONING_START') && !remainingText.contains('SPLIT_MESSAGE')) {
-          debugPrint('[Chat] Speaking final phrase (${remainingText.length} chars): ${remainingText.substring(0, min(50, remainingText.length))}...');
-          await _voiceService.speak(remainingText);
+        final remainingText = _currentTtsBuffer.toString().trim();
+        if (remainingText.isNotEmpty &&
+            !remainingText.contains('REASONING_START') &&
+            !remainingText.contains('SPLIT_MESSAGE')) {
+
+          // Use the same regex pattern as main chunking
+          final sentenceBreaks = RegExp(r'(?<!\d)[.!?](?:\s+|\n)');
+          final matches = sentenceBreaks.allMatches(remainingText).toList();
+
+          String finalChunk;
+          if (matches.isNotEmpty) {
+            // If we have complete sentences, take them all
+            finalChunk = remainingText.substring(0, matches.last.end).trim();
+          } else if (remainingText.endsWith('.') || remainingText.endsWith('!') || remainingText.endsWith('?')) {
+            // Handle case where the text ends with punctuation but no space/newline
+            finalChunk = remainingText;
+          } else {
+            // If no sentence breaks and no ending punctuation, speak the remaining text as is
+            finalChunk = remainingText;
+          }
+
+          if (finalChunk.isNotEmpty) {
+            final expectedDuration = (finalChunk.length / _charsPerSecond).toStringAsFixed(1);
+            debugPrint('[Chat] Speaking final chunk (${finalChunk.length} chars, ~${expectedDuration}s):\n$finalChunk');
+            await _voiceService.speak(finalChunk);
+          }
         }
+        _currentTtsBuffer.clear();
       }
 
       if (_ttsQueue.isEmpty) {
@@ -198,7 +193,7 @@ class ChatProvider extends ChangeNotifier {
     _ttsQueue.clear();
     _currentTtsBuffer.clear();
     _isProcessingTts = false;
-    _lastChunkSize = 100; // Reset chunk size
+    _lastChunkTime = DateTime.now();  // Reset the timing
   }
 
   Future<void> stopSpeaking() async {
