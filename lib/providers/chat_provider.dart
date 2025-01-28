@@ -153,19 +153,16 @@ class ChatProvider extends ChangeNotifier {
             !remainingText.contains('REASONING_START') &&
             !remainingText.contains('SPLIT_MESSAGE')) {
 
-          // Use a more lenient pattern for the final text that includes sentence endings without spaces
+          // Process any complete sentences first
           final sentenceBreaks = RegExp(r'(?<!\d)[.!?](?:\s+|\n|$)');
           final matches = sentenceBreaks.allMatches(remainingText).toList();
 
           String finalChunk;
           if (matches.isNotEmpty) {
-            // If we have complete sentences, take them all
+            // Take all complete sentences
             finalChunk = remainingText.substring(0, matches.last.end).trim();
-          } else if (remainingText.endsWith('.') || remainingText.endsWith('!') || remainingText.endsWith('?')) {
-            // Handle case where the text ends with punctuation but no space/newline
-            finalChunk = remainingText;
           } else {
-            // If no sentence breaks and no ending punctuation, speak the remaining text as is
+            // If no sentence breaks, take the entire remaining text
             finalChunk = remainingText;
           }
 
