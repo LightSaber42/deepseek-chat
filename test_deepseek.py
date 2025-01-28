@@ -28,7 +28,7 @@ def main():
     # Round 1
     messages = [{"role": "user", "content": "9.11 and 9.8, which is greater?"}]
     response = client.chat.completions.create(
-        model="deepseek-reasoner",
+        model="deepseek-chat",
         messages=messages,
         stream=True
     )

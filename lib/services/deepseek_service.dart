@@ -85,10 +85,10 @@ class DeepSeekService {
                   final json = jsonDecode(data);
                   final delta = json['choices'][0]['delta'];
 
-                  // Handle reasoning content
+                  // Both models use the same format according to docs
                   if (delta.containsKey('reasoning_content')) {
                     final reasoningContent = delta['reasoning_content'];
-                    if (reasoningContent != null) {
+                    if (reasoningContent != null && reasoningContent.isNotEmpty) {
                       debugPrint('[API] Reasoning content: $reasoningContent');
                       controller.add('🤔REASONING_START🤔');
                       controller.add(reasoningContent);
@@ -96,7 +96,7 @@ class DeepSeekService {
                     }
                   } else if (delta.containsKey('content')) {
                     final content = delta['content'];
-                    if (content != null) {
+                    if (content != null && content.isNotEmpty) {
                       debugPrint('[API] Content: $content');
                       controller.add(content);
                     }
