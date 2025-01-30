@@ -29,7 +29,7 @@ class ChatProvider extends ChangeNotifier {
   bool _isProcessingTts = false;
   StringBuffer _currentTtsBuffer = StringBuffer();
   DateTime _lastChunkTime = DateTime.now();
-  static const double _charsPerSecond = 10.0;  // Approximate characters per second for TTS
+  static const double _charsPerSecond = 15.0;  // Approximate characters per second for TTS
 
   bool get isResponding => _isResponding;
   bool get isListening => _voiceService.isListening;
@@ -138,7 +138,7 @@ class ChatProvider extends ChangeNotifier {
           debugPrint('[Chat] Speaking chunk (${text.length} chars, ~${expectedDuration}s):\n$text');
 
           try {
-            await _voiceService.speak(text);
+            await _voiceService.bufferText(text);
           } catch (e) {
             debugPrint('[Chat] Error during TTS: $e');
           }
@@ -169,7 +169,7 @@ class ChatProvider extends ChangeNotifier {
           if (finalChunk.isNotEmpty) {
             final expectedDuration = (finalChunk.length / _charsPerSecond).toStringAsFixed(1);
             debugPrint('[Chat] Speaking final chunk (${finalChunk.length} chars, ~${expectedDuration}s):\n$finalChunk');
-            await _voiceService.speak(finalChunk);
+            await _voiceService.bufferText(finalChunk);
           }
         }
         _currentTtsBuffer.clear();
@@ -480,8 +480,6 @@ class ChatProvider extends ChangeNotifier {
       ];
 
       debugPrint('[Chat] Sending messages with system prompt: ${messages.length} messages');
-      debugPrint('[Chat] First message role: ${messages.first['role']}');
-      debugPrint('[Chat] System prompt: ${_systemPrompt.substring(0, min(50, _systemPrompt.length))}...');
 
       // Get the stream
       final stream = settings.selectedModel.startsWith('openrouter')
@@ -490,6 +488,12 @@ class ChatProvider extends ChangeNotifier {
 
       // Process each chunk as it arrives
       await for (String chunk in stream) {
+        // Skip empty chunks
+        if (chunk.trim().isEmpty) {
+          debugPrint('[Chat] Skipping empty chunk');
+          continue;
+        }
+
         // Process special tokens
         if (chunk == '🤔REASONING_START🤔') {
           isInReasoning = true;
@@ -506,6 +510,14 @@ class ChatProvider extends ChangeNotifier {
         }
         if (chunk == '💫SPLIT_MESSAGE💫') {
           if (!settings.selectedModel.startsWith('openrouter')) {
+            // Ensure previous content is fully processed
+            if (responseMessage != null && currentResponseBuffer.isNotEmpty) {
+              await _voiceService.bufferText(currentResponseBuffer.toString());
+              await _voiceService.finishSpeaking();
+            }
+
+            // Reset for new message
+            currentResponseBuffer.clear();
             responseMessage = ChatMessage(role: 'assistant', content: '');
             _messages.add(responseMessage);
             notifyListeners();
@@ -521,17 +533,23 @@ class ChatProvider extends ChangeNotifier {
             notifyListeners();
           }
         } else {
-          // For regular content, update both display and TTS immediately
+          // For regular content, update both display and TTS
           if (responseMessage != null) {
             currentResponseBuffer.write(chunk);
             responseMessage.content = currentResponseBuffer.toString();
             notifyListeners();
-          }
-          // Send chunk to TTS immediately
-          if (chunk.trim().isNotEmpty) {
-            _ttsController.add(chunk);
+
+            // Buffer the text in voice service
+            if (chunk.trim().isNotEmpty) {
+              await _voiceService.bufferText(chunk);
+            }
           }
         }
+      }
+
+      // Process any remaining buffered content
+      if (responseMessage != null && currentResponseBuffer.isNotEmpty) {
+        await _voiceService.finishSpeaking();
       }
 
       // Add final message to history
@@ -539,13 +557,17 @@ class ChatProvider extends ChangeNotifier {
         _history.add(responseMessage);
       }
 
-    } catch (e) {
-      debugPrint('Error in sendMessage: $e');
+    } catch (e, stackTrace) {
+      debugPrint('[Chat] Error in sendMessage: $e');
+      debugPrint('[Chat] Stack trace: $stackTrace');
       final errorMessage = ChatMessage(
         role: 'assistant',
         content: 'I apologize, but I encountered an error while processing your message. Please try again.',
       );
       _messages.add(errorMessage);
+
+      // Ensure voice service is reset
+      await _voiceService.stopSpeaking();
     } finally {
       _isResponding = false;
       notifyListeners();
@@ -580,19 +602,18 @@ class ChatProvider extends ChangeNotifier {
 
   void clearMessages() {
     _messages.clear();
-    _ttsQueue.clear();
-    _isProcessingTts = false;
     _voiceService.stopSpeaking();
     notifyListeners();
   }
 
   void _onTtsComplete() {
     debugPrint('[Chat] TTS completion callback triggered');
-    if (!_voiceService.isListening) {
+    // Only start listening if we're not already listening and not speaking
+    if (!_voiceService.isListening && !_voiceService.isSpeaking) {
       debugPrint('[Chat] Starting voice input after TTS completion');
       toggleVoiceInput();
     } else {
-      debugPrint('[Chat] Voice input already active, skipping activation');
+      debugPrint('[Chat] Voice input already active or TTS still in progress, skipping activation');
     }
   }
 
@@ -607,6 +628,20 @@ class ChatProvider extends ChangeNotifier {
     } catch (e) {
       debugPrint('[Settings] Error accessing settings: $e');
       return AppSettings.defaults();
+    }
+  }
+
+  Future<void> processText(String text) async {
+    if (text.trim().isEmpty) return;
+    await _voiceService.bufferText(text);
+    await _voiceService.finishSpeaking();
+  }
+
+  Future<void> processChunk(String chunk, bool isLastChunk) async {
+    if (chunk.trim().isEmpty) return;
+    await _voiceService.bufferText(chunk);
+    if (isLastChunk) {
+      await _voiceService.finishSpeaking();
     }
   }
 }
