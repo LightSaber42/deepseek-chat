@@ -30,20 +30,31 @@ class VoiceService {
   String _cleanTextForTts(String text) {
     LogUtils.log('[TTS] Text before TTS cleaning: """$text"""');
 
-    // First normalize all spaces
-    text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    // First normalize basic spaces but preserve natural spacing
+    text = text.replaceAll(RegExp(r'\s{3,}'), ' ').trim();
 
-    // Fix decimal numbers (13. 8 -> 13.8)
-    var matches = RegExp(r'(\d+)\s*\.\s*(\d+)').allMatches(text).toList();
-    for (var match in matches.reversed) {
-      var start = match.start;
-      var end = match.end;
-      var num1 = match.group(1);
-      var num2 = match.group(2);
-      text = text.replaceRange(start, end, '$num1.$num2');
-    }
+    // Fix decimal numbers (e.g., "13. 8" -> "13.8")
+    text = text.replaceAllMapped(
+      RegExp(r'(\d+)\s*\.\s*(\d+)'),
+      (match) => '${match.group(1)!}.${match.group(2)!}'
+    );
 
-    // Fix contractions and possessives
+    // Fix year numbers (e.g., "1 9 6 7" -> "1967")
+    text = text.replaceAllMapped(
+      RegExp(r'(\d)\s+(\d)\s+(\d)\s+(\d)(?!\d)'),
+      (match) => '${match.group(1)!}${match.group(2)!}${match.group(3)!}${match.group(4)!}'
+    );
+
+    // Fix other multi-digit numbers (e.g., "1 2 3" -> "123")
+    text = text.replaceAllMapped(
+      RegExp(r'(\d)\s+(?=\d)'),
+      (match) => match.group(1)!
+    );
+
+    // Only clean aggressive markdown (##, ###, etc) but leave basic formatting
+    text = text.replaceAll(RegExp(r'#{2,}'), '');
+
+    // Fix contractions and possessives only if there's extra space
     text = text
       .replaceAll(" 's", "'s")
       .replaceAll(" 't", "'t")
@@ -53,31 +64,31 @@ class VoiceService {
       .replaceAll(" 'd", "'d")
       .replaceAll(" 'm", "'m");
 
-    // Fix hyphenated words
+    // Fix hyphenated words only if there's extra space
     text = text
       .replaceAll(' - ', '-')
       .replaceAll(' -', '-')
       .replaceAll('- ', '-');
 
-    // Fix spaces around punctuation
+    // Fix spaces around punctuation only if there's extra space
     text = text
-      .replaceAll(' ,', ',')
-      .replaceAll(' .', '.')
-      .replaceAll(' !', '!')
-      .replaceAll(' ?', '?')
-      .replaceAll(' :', ':')
-      .replaceAll(' ;', ';')
-      .replaceAll(' )', ')')
-      .replaceAll('( ', '(');
+      .replaceAll('  ,', ',')
+      .replaceAll('  .', '.')
+      .replaceAll('  !', '!')
+      .replaceAll('  ?', '?')
+      .replaceAll('  :', ':')
+      .replaceAll('  ;', ';')
+      .replaceAll('  )', ')')
+      .replaceAll('(  ', '(');
 
-    // Add spaces after punctuation, but not in decimal numbers
+    // Add spaces after punctuation only if missing
     text = text.replaceAllMapped(
-      RegExp(r'([,.!?:;])(?!\s)(?!\d)'),
-      (match) => '${match.group(1)} '
+      RegExp(r'([,.!?:;])(?=\S)(?!\d)'),
+      (match) => '${match.group(1)!} '
     );
 
-    // Final cleanup of any double spaces
-    text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    // Final cleanup of any triple or more spaces
+    text = text.replaceAll(RegExp(r'\s{3,}'), ' ').trim();
 
     LogUtils.log('[TTS] Text after TTS cleaning: """$text"""');
     return text;
@@ -222,15 +233,24 @@ class VoiceService {
       LogUtils.log('[TTS] Added to buffer (${text.length} chars): """$text"""');
       LogUtils.log('[TTS] Current buffer size: ${_currentBuffer.length} chars');
 
-      // Only process if we have a sentence ending
+      // Process buffer when we have complete sentences
       String currentText = _currentBuffer.toString();
-      if (currentText.contains(RegExp(r'[.!?](\s|$)'))) {
-        // Split into sentences, keeping delimiters
-        List<String> parts = currentText.split(RegExp(r'(?<=[.!?])(?=\s|$)'));
+
+      // Look for sentence endings not preceded by numbers (to avoid splitting "13.8")
+      RegExp sentenceEnd = RegExp(r'(?<!\d\s*)[.!?](?=\s|$)');
+      if (currentText.contains(sentenceEnd)) {
+        // Split into sentences while keeping delimiters
+        List<String> parts = currentText.split(sentenceEnd)
+          .where((s) => s.trim().isNotEmpty)
+          .toList();
 
         if (parts.length > 1) {
-          // Take all complete sentences and add to queue
-          String toSpeak = parts.sublist(0, parts.length - 1).join('').trim();
+          // Take all complete sentences
+          String toSpeak = parts.sublist(0, parts.length - 1)
+            .map((s) => s.trim() + '.')  // Add back the delimiter
+            .join(' ')
+            .trim();
+
           if (toSpeak.isNotEmpty) {
             _ttsQueue.add(toSpeak);
             // Start processing if not already doing so
