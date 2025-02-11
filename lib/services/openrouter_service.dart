@@ -4,23 +4,39 @@ import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 import '../utils/log_utils.dart';
 import 'dart:math' show min;
+import 'base_llm_service.dart';
 
-class OpenRouterService {
+class OpenRouterService extends BaseLLMService {
   static const String _baseUrl = 'https://openrouter.ai/api/v1';
   String _apiKey = '';
   String _selectedModel = 'deepseek/deepseek-r1';
 
+  @override
   String get apiKey => _apiKey;
 
+  @override
+  String get currentModel => _selectedModel;
+
+  @override
   Future<void> updateApiKey(String apiKey) async {
     _apiKey = apiKey;
+    final isValid = await testConnection();
+    if (!isValid) {
+      throwServiceError('Invalid API key', code: 'invalid_api_key');
+    }
   }
 
-  void setModel(String model) {
+  @override
+  Future<void> setModel(String model) async {
     _selectedModel = model;
+    debugPrint('OpenRouter model set to: $_selectedModel');
   }
 
-  Future<Stream<String>> sendMessage(List<Map<String, dynamic>> messages) async {
+  @override
+  Future<Stream<String>> sendMessage(
+    List<Map<String, dynamic>> messages, {
+    LLMServiceOptions? options,
+  }) async {
     try {
       final url = Uri.parse('$_baseUrl/chat/completions');
       final headers = {
@@ -29,26 +45,31 @@ class OpenRouterService {
         'HTTP-Referer': 'https://github.com/yourusername/deepseek-frontend',
       };
 
-      debugPrint('[OpenRouter] Sending request with messages: ${messages.length} messages');
-      debugPrint('[OpenRouter] First message role: ${messages.first['role']}');
-      debugPrint('[OpenRouter] System prompt: ${messages.first['content'].substring(0, min<int>(50, messages.first['content'].length))}...');
+      final formattedMessages = formatHistory(messages);
+      debugPrint('[OpenRouter] Sending request with messages: ${formattedMessages.length} messages');
+      debugPrint('[OpenRouter] First message role: ${formattedMessages.first['role']}');
+      debugPrint('[OpenRouter] System prompt: ${formattedMessages.first['content'].substring(0, min<int>(50, formattedMessages.first['content'].length))}...');
       debugPrint('[OpenRouter] Using model: $_selectedModel');
 
-      final body = jsonEncode({
+      final requestBody = {
         'model': _selectedModel,
-        'messages': messages,
+        'messages': formattedMessages,
         'stream': true,
-      });
+        'max_tokens': options?.maxTokens ?? 2000,
+        'temperature': options?.temperature ?? 1.0,
+        if (options?.additionalOptions != null) ...options!.additionalOptions!,
+      };
 
       final request = http.Request('POST', url);
       request.headers.addAll(headers);
-      request.body = body;
+      request.body = jsonEncode(requestBody);
 
       final response = await http.Client().send(request);
 
       if (response.statusCode != 200) {
         final errorBody = await response.stream.bytesToString();
-        throw Exception('OpenRouter API error: ${response.statusCode} $errorBody');
+        throwServiceError('OpenRouter API error: ${response.statusCode} $errorBody',
+            code: 'api_error_${response.statusCode}');
       }
 
       // Create a StreamController to handle the response stream
@@ -66,6 +87,11 @@ class OpenRouterService {
 
                 try {
                   final Map<String, dynamic> data = jsonDecode(jsonStr);
+                  if (!validateResponseFormat(data)) {
+                    debugPrint('[OpenRouter] Invalid response format');
+                    return;
+                  }
+
                   final content = data['choices'][0]['delta']['content'];
                   if (content != null && content.isNotEmpty) {
                     controller.add(content);
@@ -78,7 +104,7 @@ class OpenRouterService {
             onDone: () => controller.close(),
             onError: (error) {
               debugPrint('[OpenRouter] Error in stream: $error');
-              controller.addError(error);
+              controller.addError(LLMServiceException('Stream error', originalError: error));
               controller.close();
             },
           );
@@ -86,10 +112,11 @@ class OpenRouterService {
       return controller.stream;
     } catch (e) {
       debugPrint('[OpenRouter] Error in service: $e');
-      rethrow;
+      throwServiceError(e);
     }
   }
 
+  @override
   Future<String?> getAccountBalance() async {
     try {
       final url = Uri.parse('$_baseUrl/auth/balance');
@@ -109,6 +136,7 @@ class OpenRouterService {
     }
   }
 
+  @override
   Future<bool> testConnection() async {
     try {
       final url = Uri.parse('$_baseUrl/chat/completions');
@@ -135,9 +163,7 @@ class OpenRouterService {
       if (response.statusCode == 200) {
         try {
           final jsonResponse = jsonDecode(response.body);
-          if (jsonResponse['choices'] != null &&
-              jsonResponse['choices'].isNotEmpty &&
-              jsonResponse['choices'][0]['message'] != null) {
+          if (validateResponseFormat(jsonResponse)) {
             LogUtils.log('[TEST] OpenRouter connection successful');
             return true;
           }

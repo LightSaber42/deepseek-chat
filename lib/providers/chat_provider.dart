@@ -1,9 +1,10 @@
 import 'package:flutter/foundation.dart';
 import '../models/chat_message.dart';
 import '../models/app_settings.dart';
-import '../services/deepseek_service.dart';
-import '../services/openrouter_service.dart';
-import '../services/voice_service.dart';
+import '../services/base_llm_service.dart';
+import '../services/base_tts_service.dart';
+import '../services/llm_service_factory.dart';
+import '../services/tts_service_factory.dart';
 import 'package:hive/hive.dart';
 import 'dart:convert';
 import 'dart:math' show min, max;
@@ -13,15 +14,17 @@ import 'dart:collection';
 class ChatProvider extends ChangeNotifier {
   static const String _settingsBoxName = 'settings';
 
-  final DeepSeekService _deepseekService;
-  final OpenRouterService _openrouterService;
-  final VoiceService _voiceService;
+  late BaseLLMService _llmService;
+  late BaseTTSService _ttsService;
   final List<ChatMessage> _messages = [];
   final List<ChatMessage> _history = [];
+  final List<String> _debugMessages = [];
   bool _isResponding = false;
   String _systemPrompt = '';
   String? _accountBalance;
   Box<AppSettings>? _settingsBox;
+  LLMProvider _currentProvider = LLMProvider.deepseek;
+  bool _isInitialized = false;
 
   final StreamController<String> _ttsController = StreamController<String>();
   StreamSubscription<String>? _ttsSubscription;
@@ -32,42 +35,26 @@ class ChatProvider extends ChangeNotifier {
   static const double _charsPerSecond = 15.0;  // Approximate characters per second for TTS
 
   bool get isResponding => _isResponding;
-  bool get isListening => _voiceService.isListening;
-  bool get isSpeaking => _voiceService.isSpeaking;
-  bool get isMuted => _voiceService.isMuted;
+  bool get isListening => _isInitialized ? _ttsService.isListening : false;
+  bool get isSpeaking => _isInitialized ? _ttsService.isSpeaking : false;
+  bool get isMuted => _isInitialized ? _ttsService.isMuted : false;
+  bool get isInitialized => _isInitialized;
   String get systemPrompt => _systemPrompt;
-  String get apiKey => _deepseekService.apiKey;
-  String get openrouterApiKey {
-    if (_settingsBox == null) {
-      debugPrint('[Settings] Warning: Settings box not initialized yet');
-      return '';
-    }
-    try {
-      final settings = _settingsBox!.get(0);
-      if (settings == null) {
-        debugPrint('[Settings] Warning: No settings found in Hive');
-        return '';
-      }
-      final key = settings.openrouterApiKey;
-      debugPrint('[Settings] Retrieved OpenRouter API key from Hive: ${key.isNotEmpty ? "Present" : "Empty"}');
-      return key;
-    } catch (e) {
-      debugPrint('[Settings] Error getting OpenRouter API key: $e');
-      return '';
-    }
-  }
+  String get apiKey => _llmService.apiKey;
+  String get openrouterApiKey => _getSettings().openrouterApiKey;
   String? get accountBalance => _accountBalance;
   String get selectedModel => _getSettings().selectedModel;
   String get customOpenrouterModel => _getSettings().customOpenrouterModel;
 
-  ChatProvider(this._deepseekService, this._openrouterService, this._voiceService) {
-    _initServices();
-    _initTtsListener();
-    _voiceService.setTtsCompleteCallback(_onTtsComplete);
-    _voiceService.setStateChangeCallback(() {
-      debugPrint('[Chat] Voice service state changed, notifying listeners');
+  List<ChatMessage> get messages => _messages;
+  List<String> get debugMessages => _debugMessages;
+
+  ChatProvider() {
+    _initServices().then((_) {
+      _isInitialized = true;
       notifyListeners();
     });
+    _initTtsListener();
   }
 
   void _initTtsListener() {
@@ -138,7 +125,7 @@ class ChatProvider extends ChangeNotifier {
           debugPrint('[Chat] Speaking chunk (${text.length} chars, ~${expectedDuration}s):\n$text');
 
           try {
-            await _voiceService.bufferText(text);
+            await _ttsService.bufferText(text);
           } catch (e) {
             debugPrint('[Chat] Error during TTS: $e');
           }
@@ -152,48 +139,30 @@ class ChatProvider extends ChangeNotifier {
         if (remainingText.isNotEmpty &&
             !remainingText.contains('REASONING_START') &&
             !remainingText.contains('SPLIT_MESSAGE')) {
-
-          // Process any complete sentences first
-          final sentenceBreaks = RegExp(r'(?<!\d)[.!?](?:\s+|\n|$)');
-          final matches = sentenceBreaks.allMatches(remainingText).toList();
-
-          String finalChunk;
-          if (matches.isNotEmpty) {
-            // Take all complete sentences
-            finalChunk = remainingText.substring(0, matches.last.end).trim();
-          } else {
-            // If no sentence breaks, take the entire remaining text
-            finalChunk = remainingText;
-          }
-
-          if (finalChunk.isNotEmpty) {
-            final expectedDuration = (finalChunk.length / _charsPerSecond).toStringAsFixed(1);
-            debugPrint('[Chat] Speaking final chunk (${finalChunk.length} chars, ~${expectedDuration}s):\n$finalChunk');
-            await _voiceService.bufferText(finalChunk);
-          }
+          await _ttsService.bufferText(remainingText);
         }
         _currentTtsBuffer.clear();
       }
 
-      debugPrint('[Chat] All TTS chunks completed, triggering completion callback');
-      _onTtsComplete(); // Call directly instead of through voice service
+      debugPrint('[Chat] All TTS chunks completed');
+      await _ttsService.finishSpeaking();
     } finally {
       _isProcessingTts = false;
     }
   }
 
-  // Add method to clear TTS state
   void clearTtsState() {
     debugPrint('[Chat] Clearing TTS state');
     _ttsQueue.clear();
     _currentTtsBuffer.clear();
     _isProcessingTts = false;
-    _lastChunkTime = DateTime.now();  // Reset the timing
+    _lastChunkTime = DateTime.now();
   }
 
   Future<void> stopSpeaking() async {
+    if (!_isInitialized) return;
     clearTtsState();
-    await _voiceService.stopSpeaking();
+    await _ttsService.stopSpeaking();
   }
 
   @override
@@ -233,71 +202,80 @@ class ChatProvider extends ChangeNotifier {
       // Update system prompt
       _systemPrompt = settings.systemPrompt;
 
-      // Initialize services with stored keys
-      debugPrint('[Settings] Initializing services with stored keys...');
+      // Initialize TTS service
+      _ttsService = TTSServiceFactory.createService(
+        provider: TTSProvider.system,
+        options: TTSServiceFactory.getDefaultOptions(TTSProvider.system),
+      );
 
-      // Initialize DeepSeek service
-      if (settings.apiKey.isNotEmpty) {
-        await _deepseekService.updateApiKey(settings.apiKey);
-        debugPrint('[Settings] Initialized DeepSeek service with stored key');
-      } else {
+      // Initialize LLM service based on settings
+      await _initializeLLMService(settings);
+
+      debugPrint('[Settings] Services initialized successfully');
+    } catch (e) {
+      debugPrint('[ERROR] Error initializing services: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> _initializeLLMService(AppSettings settings) async {
+    // Determine which provider to use based on settings
+    if (settings.selectedModel.startsWith('deepseek')) {
+      _currentProvider = LLMProvider.deepseek;
+      if (settings.apiKey.isEmpty) {
         debugPrint('[Settings] No DeepSeek API key found in settings');
+        return;
       }
 
-      // Initialize OpenRouter service
-      if (settings.openrouterApiKey.isNotEmpty) {
-        await _openrouterService.updateApiKey(settings.openrouterApiKey);
-        debugPrint('[Settings] Initialized OpenRouter service with key: ${settings.openrouterApiKey.substring(0, min(10, settings.openrouterApiKey.length))}...');
-      } else {
+      _llmService = LLMServiceFactory.createService(
+        provider: LLMProvider.deepseek,
+        apiKey: settings.apiKey,
+        model: settings.selectedModel,
+      );
+    } else {
+      _currentProvider = LLMProvider.openRouter;
+      if (settings.openrouterApiKey.isEmpty) {
         debugPrint('[Settings] No OpenRouter API key found in settings');
+        return;
       }
 
-      // Set the appropriate model
-      debugPrint('[Settings] Setting model: ${settings.selectedModel}');
-      if (settings.selectedModel.startsWith('openrouter')) {
-        if (settings.selectedModel == 'openrouter-custom' && settings.customOpenrouterModel.isNotEmpty) {
-          _openrouterService.setModel(settings.customOpenrouterModel);
-          debugPrint('[Settings] Set custom OpenRouter model: ${settings.customOpenrouterModel}');
-        } else if (settings.selectedModel == 'openrouter-deepseek-r1') {
-          _openrouterService.setModel('deepseek/deepseek-r1');
-          debugPrint('[Settings] Set OpenRouter model: deepseek/deepseek-r1');
-        } else if (settings.selectedModel == 'openrouter-deepseek-r1-distill') {
-          _openrouterService.setModel('deepseek/deepseek-r1-distill-llama-70b');
-          debugPrint('[Settings] Set OpenRouter model: deepseek/deepseek-r1-distill-llama-70b');
-        }
-      } else {
-        final model = settings.selectedModel == 'deepseek-reasoner' ? 'deepseek-reasoner' : 'deepseek-chat';
-        await _deepseekService.setModel(model);
-        debugPrint('[Settings] Set DeepSeek model: $model');
-      }
+      _llmService = LLMServiceFactory.createService(
+        provider: LLMProvider.openRouter,
+        apiKey: settings.openrouterApiKey,
+        model: settings.customOpenrouterModel.isNotEmpty
+            ? settings.customOpenrouterModel
+            : LLMServiceFactory.getDefaultModel(LLMProvider.openRouter),
+      );
+    }
 
-      // Initialize voice service
-      await _initVoiceService();
-
-      // Refresh balance last
-      await refreshBalance();
-
-      notifyListeners();
-      debugPrint('[Settings] Initialization complete');
-    } catch (e, stackTrace) {
-      debugPrint('[Settings] Error in _initServices: $e');
-      debugPrint('[Settings] Stack trace: $stackTrace');
-      // Create a default settings if Hive fails
-      _systemPrompt = AppSettings.defaults().systemPrompt;
+    // Test connection and update balance
+    if (await _llmService.testConnection()) {
+      _accountBalance = await _llmService.getAccountBalance();
       notifyListeners();
     }
   }
 
-  Future<void> _initVoiceService() async {
-    final available = await _voiceService.init();
-    if (!available) {
-      debugPrint('Speech recognition not available on this device');
+  AppSettings _getSettings() {
+    if (_settingsBox == null || _settingsBox!.isEmpty) {
+      return AppSettings.defaults();
     }
+    return _settingsBox!.get(0)!;
+  }
+
+  Future<void> updateSettings(AppSettings newSettings) async {
+    if (_settingsBox == null) return;
+
+    await _settingsBox!.put(0, newSettings);
+    _systemPrompt = newSettings.systemPrompt;
+
+    // Reinitialize services with new settings
+    await _initializeLLMService(newSettings);
+    notifyListeners();
   }
 
   Future<void> updateSystemPrompt(String prompt) async {
     _systemPrompt = prompt;
-    final settings = _getSettings() ?? AppSettings.defaults();
+    final settings = _getSettings();
     settings.systemPrompt = prompt;
     await _settingsBox!.put(0, settings);
     notifyListeners();
@@ -308,7 +286,7 @@ class ChatProvider extends ChangeNotifier {
 
     try {
       // Update service first
-      await _deepseekService.updateApiKey(apiKey);
+      await _llmService.updateApiKey(apiKey);
 
       // Then update Hive storage
       AppSettings settings = _settingsBox!.get(0) ?? AppSettings.defaults();
@@ -339,7 +317,7 @@ class ChatProvider extends ChangeNotifier {
       // Update both storage and service
       settings.openrouterApiKey = apiKey;
       await _settingsBox!.put(0, settings);
-      await _openrouterService.updateApiKey(apiKey);
+      await _llmService.updateApiKey(apiKey);
 
       debugPrint('[Settings] Saved OpenRouter API key to Hive: ${apiKey.substring(0, min(10, apiKey.length))}...');
 
@@ -362,21 +340,21 @@ class ChatProvider extends ChangeNotifier {
 
     // If switching to OpenRouter, ensure we have the API key set
     if (model.startsWith('openrouter') && settings.openrouterApiKey.isNotEmpty) {
-      await _openrouterService.updateApiKey(settings.openrouterApiKey);
+      await _llmService.updateApiKey(settings.openrouterApiKey);
     }
 
     if (model.startsWith('openrouter')) {
       if (model == 'openrouter-custom') {
-        _openrouterService.setModel(settings.customOpenrouterModel);
+        await _llmService.updateApiKey(settings.openrouterApiKey);
       } else if (model == 'openrouter-deepseek-r1') {
-        _openrouterService.setModel('deepseek/deepseek-r1');
+        await _llmService.updateApiKey('deepseek/deepseek-r1');
       } else if (model == 'openrouter-deepseek-r1-distill') {
-        _openrouterService.setModel('deepseek/deepseek-r1-distill-llama-70b');
+        await _llmService.updateApiKey('deepseek/deepseek-r1-distill-llama-70b');
       }
       // Only fetch balance for OpenRouter
       await refreshBalance();
     } else {
-      await _deepseekService.setModel(model == 'deepseek-reasoner' ? 'deepseek-reasoner' : 'deepseek-chat');
+      await _llmService.updateApiKey(model == 'deepseek-reasoner' ? 'deepseek-reasoner' : 'deepseek-chat');
       _accountBalance = 'Not available for DeepSeek';
       notifyListeners();
     }
@@ -394,7 +372,7 @@ class ChatProvider extends ChangeNotifier {
     await _settingsBox!.put(0, settings);
 
     if (settings.selectedModel == 'openrouter-custom') {
-      _openrouterService.setModel(model);
+      await _llmService.updateApiKey(settings.openrouterApiKey);
     }
 
     notifyListeners();
@@ -404,7 +382,7 @@ class ChatProvider extends ChangeNotifier {
     try {
       final settings = _getSettings();
       if (settings.selectedModel.startsWith('openrouter')) {
-        _accountBalance = await _openrouterService.getAccountBalance();
+        _accountBalance = await _llmService.getAccountBalance();
         debugPrint('[Settings] Fetched OpenRouter balance: $_accountBalance');
       } else {
         // DeepSeek doesn't support balance checking
@@ -419,13 +397,14 @@ class ChatProvider extends ChangeNotifier {
   }
 
   Future<void> toggleVoiceInput() async {
+    if (!_isInitialized) return;
     try {
-      if (_voiceService.isListening) {
+      if (_ttsService.isListening) {
         debugPrint('[Chat] Stopping voice input');
-        await _voiceService.stopListening();
+        await _ttsService.stopListening();
       } else {
         debugPrint('[Chat] Starting voice input');
-        await _voiceService.startListening((text) {
+        await _ttsService.startListening((text) {
           if (text.isNotEmpty) {
             debugPrint('[Chat] Voice input received: $text');
             sendMessage(text);
@@ -440,8 +419,6 @@ class ChatProvider extends ChangeNotifier {
     }
   }
 
-  List<ChatMessage> get messages => _messages;
-
   int _findSplitIndex(String text, int startIndex) {
     final sentenceEnd = text.lastIndexOf(RegExp(r'[.!?]'), startIndex);
     if (sentenceEnd != -1) return sentenceEnd + 1;
@@ -454,6 +431,7 @@ class ChatProvider extends ChangeNotifier {
     if (message.trim().isEmpty) return;
 
     try {
+      _debugMessages.clear();
       _isResponding = true;
       final userMessage = ChatMessage(role: 'user', content: message);
       _messages.add(userMessage);
@@ -483,11 +461,15 @@ class ChatProvider extends ChangeNotifier {
 
       // Get the stream
       final stream = settings.selectedModel.startsWith('openrouter')
-          ? await _openrouterService.sendMessage(messages)
-          : await _deepseekService.sendMessage(messages);
+          ? await _llmService.sendMessage(messages)
+          : await _llmService.sendMessage(messages);
 
       // Process each chunk as it arrives
       await for (String chunk in stream) {
+        // Add to debug messages
+        _debugMessages.add('Chunk: "${chunk}"');
+        notifyListeners();
+
         // Skip empty chunks
         if (chunk.trim().isEmpty) {
           debugPrint('[Chat] Skipping empty chunk');
@@ -510,10 +492,10 @@ class ChatProvider extends ChangeNotifier {
         }
         if (chunk == '💫SPLIT_MESSAGE💫') {
           if (!settings.selectedModel.startsWith('openrouter')) {
-            // Ensure previous content is fully processed
+            // Create new message without waiting for TTS
             if (responseMessage != null && currentResponseBuffer.isNotEmpty) {
-              await _voiceService.bufferText(currentResponseBuffer.toString());
-              await _voiceService.finishSpeaking();
+              // Queue the current buffer for TTS without waiting
+              _ttsController.add(currentResponseBuffer.toString());
             }
 
             // Reset for new message
@@ -533,29 +515,25 @@ class ChatProvider extends ChangeNotifier {
             notifyListeners();
           }
         } else {
-          // For regular content, update both display and TTS
+          // Update display immediately without waiting for TTS
           if (responseMessage != null) {
             currentResponseBuffer.write(chunk);
             responseMessage.content = currentResponseBuffer.toString();
             notifyListeners();
 
-            // Buffer the text in voice service
-            if (chunk.trim().isNotEmpty) {
-              await _voiceService.bufferText(chunk);
-            }
+            // Queue the chunk for TTS without waiting
+            _ttsController.add(chunk);
           }
         }
-      }
-
-      // Process any remaining buffered content
-      if (responseMessage != null && currentResponseBuffer.isNotEmpty) {
-        await _voiceService.finishSpeaking();
       }
 
       // Add final message to history
       if (responseMessage != null) {
         _history.add(responseMessage);
       }
+
+      // Wait for TTS to complete before activating mic
+      await _ttsService.finishSpeaking();
 
     } catch (e, stackTrace) {
       debugPrint('[Chat] Error in sendMessage: $e');
@@ -567,7 +545,7 @@ class ChatProvider extends ChangeNotifier {
       _messages.add(errorMessage);
 
       // Ensure voice service is reset
-      await _voiceService.stopSpeaking();
+      await _ttsService.stopSpeaking();
     } finally {
       _isResponding = false;
       notifyListeners();
@@ -578,8 +556,8 @@ class ChatProvider extends ChangeNotifier {
     try {
       final settings = _getSettings() ?? AppSettings.defaults();
       final isConnected = settings.selectedModel.startsWith('openrouter')
-          ? await _openrouterService.testConnection()
-          : await _deepseekService.testConnection();
+          ? await _llmService.testConnection()
+          : await _llmService.testConnection();
       return isConnected;
     } catch (e) {
       debugPrint('Error testing API connection: $e');
@@ -588,7 +566,7 @@ class ChatProvider extends ChangeNotifier {
   }
 
   void toggleMute() {
-    _voiceService.toggleMute();
+    _ttsService.toggleMute();
     notifyListeners();
   }
 
@@ -596,52 +574,32 @@ class ChatProvider extends ChangeNotifier {
     final settings = _getSettings() ?? AppSettings.defaults();
     settings.useReasoningModel = value;
     await _settingsBox!.put(0, settings);
-    await _deepseekService.setModel(value ? 'deepseek-reasoner' : 'deepseek-chat');
+    await _llmService.updateApiKey(value ? 'deepseek-reasoner' : 'deepseek-chat');
     notifyListeners();
   }
 
   void clearMessages() {
     _messages.clear();
-    _voiceService.stopSpeaking();
+    _ttsService.stopSpeaking();
     notifyListeners();
-  }
-
-  void _onTtsComplete() {
-    debugPrint('[Chat] TTS completion callback triggered');
-    // Only start listening if we're not already listening and not speaking
-    if (!_voiceService.isListening && !_voiceService.isSpeaking) {
-      debugPrint('[Chat] Starting voice input after TTS completion');
-      toggleVoiceInput();
-    } else {
-      debugPrint('[Chat] Voice input already active or TTS still in progress, skipping activation');
-    }
-  }
-
-  // Helper method to safely get settings
-  AppSettings _getSettings() {
-    if (_settingsBox == null || !_settingsBox!.isOpen) {
-      debugPrint('[Settings] Warning: Settings box not initialized or not open');
-      return AppSettings.defaults();
-    }
-    try {
-      return _settingsBox!.get(0) ?? AppSettings.defaults();
-    } catch (e) {
-      debugPrint('[Settings] Error accessing settings: $e');
-      return AppSettings.defaults();
-    }
   }
 
   Future<void> processText(String text) async {
     if (text.trim().isEmpty) return;
-    await _voiceService.bufferText(text);
-    await _voiceService.finishSpeaking();
+    await _ttsService.bufferText(text);
+    await _ttsService.finishSpeaking();
   }
 
   Future<void> processChunk(String chunk, bool isLastChunk) async {
     if (chunk.trim().isEmpty) return;
-    await _voiceService.bufferText(chunk);
+    await _ttsService.bufferText(chunk);
     if (isLastChunk) {
-      await _voiceService.finishSpeaking();
+      await _ttsService.finishSpeaking();
     }
+  }
+
+  void clearDebugMessages() {
+    _debugMessages.clear();
+    notifyListeners();
   }
 }

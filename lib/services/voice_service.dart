@@ -4,8 +4,9 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter/foundation.dart';
 import '../utils/log_utils.dart';
 import 'dart:math' show min;
+import 'base_tts_service.dart';
 
-class VoiceService {
+class VoiceService extends BaseTTSService {
   final SpeechToText _speech = SpeechToText();
   final FlutterTts _tts = FlutterTts();
   bool _isListening = false;
@@ -17,90 +18,77 @@ class VoiceService {
   // Queue management
   final List<String> _ttsQueue = [];
   bool _isProcessingTts = false;
-  final StringBuffer _currentBuffer = StringBuffer();
+  final StringBuffer _currentTtsBuffer = StringBuffer();
   static const int _optimalChunkSize = 500;
   static const Duration _minChunkDuration = Duration(milliseconds: 500);
   DateTime _lastChunkTime = DateTime.now();
+  bool _hasMoreContent = false;  // Flag to track if more content is expected
+
+  // Add tracking for spoken text
+  final Set<String> _spokenSentences = {};
+
+  // Add at class level
+  String? _lastSpokenText;
 
   bool get isListening => _isListening;
   bool get isSpeaking => _isSpeaking;
   bool get isMuted => _isMuted;
 
-  // Clean text only for TTS purposes, not for display
-  String _cleanTextForTts(String text) {
-    LogUtils.log('[TTS] Text before TTS cleaning: """$text"""');
-
-    // First normalize basic spaces but preserve natural spacing
-    text = text.replaceAll(RegExp(r'\s{3,}'), ' ').trim();
-
-    // Fix decimal numbers (e.g., "13. 8" -> "13.8")
-    text = text.replaceAllMapped(
-      RegExp(r'(\d+)\s*\.\s*(\d+)'),
-      (match) => '${match.group(1)!}.${match.group(2)!}'
-    );
-
-    // Fix year numbers (e.g., "1 9 6 7" -> "1967")
-    text = text.replaceAllMapped(
-      RegExp(r'(\d)\s+(\d)\s+(\d)\s+(\d)(?!\d)'),
-      (match) => '${match.group(1)!}${match.group(2)!}${match.group(3)!}${match.group(4)!}'
-    );
-
-    // Fix other multi-digit numbers (e.g., "1 2 3" -> "123")
-    text = text.replaceAllMapped(
-      RegExp(r'(\d)\s+(?=\d)'),
-      (match) => match.group(1)!
-    );
-
-    // Only clean aggressive markdown (##, ###, etc) but leave basic formatting
-    text = text.replaceAll(RegExp(r'#{2,}'), '');
-
-    // Fix contractions and possessives only if there's extra space
-    text = text
-      .replaceAll(" 's", "'s")
-      .replaceAll(" 't", "'t")
-      .replaceAll(" 'll", "'ll")
-      .replaceAll(" 've", "'ve")
-      .replaceAll(" 're", "'re")
-      .replaceAll(" 'd", "'d")
-      .replaceAll(" 'm", "'m");
-
-    // Fix hyphenated words only if there's extra space
-    text = text
-      .replaceAll(' - ', '-')
-      .replaceAll(' -', '-')
-      .replaceAll('- ', '-');
-
-    // Fix spaces around punctuation only if there's extra space
-    text = text
-      .replaceAll('  ,', ',')
-      .replaceAll('  .', '.')
-      .replaceAll('  !', '!')
-      .replaceAll('  ?', '?')
-      .replaceAll('  :', ':')
-      .replaceAll('  ;', ';')
-      .replaceAll('  )', ')')
-      .replaceAll('(  ', '(');
-
-    // Add spaces after punctuation only if missing
-    text = text.replaceAllMapped(
-      RegExp(r'([,.!?:;])(?=\S)(?!\d)'),
-      (match) => '${match.group(1)!} '
-    );
-
-    // Final cleanup of any triple or more spaces
-    text = text.replaceAll(RegExp(r'\s{3,}'), ' ').trim();
-
-    LogUtils.log('[TTS] Text after TTS cleaning: """$text"""');
-    return text;
+  void setTtsCompleteCallback(Function? callback) {
+    _onTtsComplete = callback;
   }
 
-  void toggleMute() {
-    _isMuted = !_isMuted;
-    if (_isMuted && _isListening) {
-      stopListening();
+  void setStateChangeCallback(Function? callback) {
+    _onStateChange = callback;
+  }
+
+  /// Stops all speech and clears the TTS queue
+  Future<void> stopSpeaking() async {
+    debugPrint('[TTS] Stopping all speech');
+    _currentTtsBuffer.clear();
+    _ttsQueue.clear();
+    _hasMoreContent = false;
+    await stop();
+  }
+
+  /// Finishes speaking any remaining buffered text
+  Future<void> finishSpeaking() async {
+    try {
+      debugPrint('[TTS] Finishing speaking. Buffer: """${_currentTtsBuffer.toString()}"""');
+      debugPrint('[TTS] Speaking: $_isSpeaking, HasMore: $_hasMoreContent');
+
+      // Only proceed if we have content to speak or are still speaking
+      if (_currentTtsBuffer.isEmpty && !_isSpeaking && !_hasMoreContent) {
+        debugPrint('[TTS] Nothing to finish speaking');
+        _onTtsComplete?.call();
+        return;
+      }
+
+      // Handle any remaining text
+      String remainingText = _currentTtsBuffer.toString().trim();
+      _currentTtsBuffer.clear();
+      _hasMoreContent = false;  // No more content expected
+
+      if (remainingText.isNotEmpty) {
+        debugPrint('[TTS] Speaking final text: """$remainingText"""');
+        await speak(remainingText);
+      }
+
+      // Wait for any ongoing speech to complete
+      if (_isSpeaking) {
+        debugPrint('[TTS] Waiting for ongoing speech to complete');
+        await _tts.awaitSpeakCompletion(true);
+      }
+
+      debugPrint('[TTS] All speaking completed, triggering callback');
+      _onTtsComplete?.call();
+    } catch (e) {
+      debugPrint('[TTS] Error in finish speaking: $e');
+      throwServiceError(e);
     }
   }
 
+  @override
   Future<bool> init() async {
     debugPrint('[TTS] Initializing voice services');
     // Request microphone permission
@@ -135,52 +123,133 @@ class VoiceService {
       debugPrint('[TTS] Speech recognition initialization failed');
     }
 
-    // Initialize TTS
-    await _tts.setLanguage('en-US');
-    await _tts.setSpeechRate(0.54);  // 54% of original speed for better comprehension
-    await _tts.setVolume(1.0);
-    await _tts.setPitch(0.9);
-
-    _tts.setStartHandler(() {
-      debugPrint('[TTS] Started speaking');
-      _isSpeaking = true;
-    });
-
+    // Initialize TTS with default options
     _tts.setCompletionHandler(() {
       debugPrint('[TTS] Completed speaking chunk');
       _isSpeaking = false;
+      // Only call completion callback if no more content is expected
+      if (!_hasMoreContent) {
+        debugPrint('[TTS] No more content expected, triggering completion callback');
+        _onTtsComplete?.call();
+      }
     });
 
     _tts.setErrorHandler((msg) {
       debugPrint('[TTS] TTS error: $msg');
       _isSpeaking = false;
+      throwServiceError(msg);
     });
+
+    await updateOptions(const TTSServiceOptions(
+      rate: 0.54,
+      pitch: 0.9,
+      volume: 1.0,
+      language: 'en-US',
+    ));
 
     debugPrint('[TTS] Voice services initialized successfully');
     return available;
   }
 
-  Future<void> startListening(void Function(String) onResult) async {
-    // Don't allow listening while speaking
-    if (_isSpeaking || _isProcessingTts) {
-      debugPrint('[TTS] Cannot start listening - TTS is active');
-      return;
-    }
-
-    if (!_speech.isAvailable) {
-      debugPrint('[TTS] Speech recognition not available');
-      throw Exception('Speech recognition not available');
-    }
+  @override
+  Future<void> speak(String text) async {
     if (_isMuted) {
-      debugPrint('[TTS] Cannot start listening - microphone is muted');
-      throw Exception('Microphone is muted');
-    }
-    if (_isListening) {
-      debugPrint('[TTS] Already listening');
+      debugPrint('[TTS] Cannot speak - TTS is muted');
       return;
     }
 
     try {
+      // Wait for any ongoing speech to complete
+      if (_isSpeaking) {
+        debugPrint('[TTS] Already speaking, waiting for completion');
+        await _tts.awaitSpeakCompletion(true);
+      }
+
+      final cleanedText = cleanTextForTTS(text);
+      debugPrint('[TTS] Speaking text: """$cleanedText"""');
+      _isSpeaking = true;
+      await _tts.speak(cleanedText);
+      await _tts.awaitSpeakCompletion(true);
+      _isSpeaking = false;
+      debugPrint('[TTS] Finished speaking text');
+    } catch (e) {
+      debugPrint('[TTS] Error in speak: $e');
+      _isSpeaking = false;
+      throwServiceError(e);
+    }
+  }
+
+  @override
+  Future<void> stop() async {
+    try {
+      await _tts.stop();
+      _isSpeaking = false;
+      _hasMoreContent = false;
+    } catch (e) {
+      throwServiceError(e);
+    }
+  }
+
+  @override
+  Future<void> updateOptions(TTSServiceOptions options) async {
+    try {
+      await _tts.setLanguage(options.language);
+      await _tts.setSpeechRate(options.rate);
+      await _tts.setVolume(options.volume);
+      await _tts.setPitch(options.pitch);
+      if (options.voice.isNotEmpty) {
+        await _tts.setVoice({"name": options.voice});
+      }
+    } catch (e) {
+      throwServiceError(e);
+    }
+  }
+
+  Future<void> startListening(void Function(String) onResult) async {
+    // Don't allow listening while speaking
+    if (isSpeaking || _isProcessingTts) {
+      debugPrint('[TTS] Cannot start listening - TTS is active');
+      return;
+    }
+
+    try {
+      // Ensure speech is initialized
+      if (!_speech.isAvailable) {
+        debugPrint('[TTS] Speech not available, attempting to initialize');
+        bool available = await _speech.initialize(
+          onStatus: (status) {
+            debugPrint('[TTS] Speech status: $status');
+            bool wasListening = _isListening;
+            if (status == 'notListening' || status == 'done') {
+              _isListening = false;
+            } else if (status == 'listening') {
+              _isListening = true;
+            }
+            // Notify if state changed
+            if (wasListening != _isListening) {
+              _onStateChange?.call();
+            }
+          },
+          onError: (error) {
+            debugPrint('[TTS] Speech recognition error: $error');
+            _isListening = false;
+            _onStateChange?.call();
+          },
+        );
+
+        if (!available) {
+          throwServiceError('Could not initialize speech recognition', code: 'speech_unavailable');
+        }
+      }
+
+      if (isMuted) {
+        throwServiceError('Microphone is muted', code: 'mic_muted');
+      }
+      if (_isListening) {
+        debugPrint('[TTS] Already listening');
+        return;
+      }
+
       debugPrint('[TTS] Starting speech recognition');
       await _speech.listen(
         onResult: (result) {
@@ -198,7 +267,7 @@ class VoiceService {
       debugPrint('[TTS] Error starting speech recognition: $e');
       _isListening = false;
       _onStateChange?.call();
-      rethrow;
+      throwServiceError(e);
     }
   }
 
@@ -214,144 +283,72 @@ class VoiceService {
 
   Future<void> bufferText(String text) async {
     if (text.startsWith('🤔')) {
-      LogUtils.log('[TTS] Skipping reasoning content');
+      debugPrint('[TTS] Skipping reasoning content');
       return;
     }
 
     try {
       if (text.isEmpty) return;
 
+      debugPrint('[TTS] Buffering new text chunk: """$text"""');
+      debugPrint('[TTS] Current buffer before adding: """${_currentTtsBuffer.toString()}"""');
+
+      _hasMoreContent = true;  // Indicate that we're receiving content
+
       // Add space if needed
-      if (_currentBuffer.isNotEmpty && !_currentBuffer.toString().endsWith(' ') &&
+      if (_currentTtsBuffer.isNotEmpty && !_currentTtsBuffer.toString().endsWith(' ') &&
           !text.startsWith(' ') && !text.startsWith('.') &&
           !text.startsWith('!') && !text.startsWith('?') &&
           !text.startsWith(',')) {
-        _currentBuffer.write(' ');
+        _currentTtsBuffer.write(' ');
       }
-      _currentBuffer.write(text);
 
-      LogUtils.log('[TTS] Added to buffer (${text.length} chars): """$text"""');
-      LogUtils.log('[TTS] Current buffer size: ${_currentBuffer.length} chars');
-
-      // Process buffer when we have complete sentences
-      String currentText = _currentBuffer.toString();
+      // Add new text to buffer
+      _currentTtsBuffer.write(text);
+      String currentText = _currentTtsBuffer.toString();
+      debugPrint('[TTS] Buffer after adding: """$currentText"""');
 
       // Look for sentence endings not preceded by numbers (to avoid splitting "13.8")
-      RegExp sentenceEnd = RegExp(r'(?<!\d\s*)[.!?](?=\s|$)');
-      if (currentText.contains(sentenceEnd)) {
-        // Split into sentences while keeping delimiters
-        List<String> parts = currentText.split(sentenceEnd)
-          .where((s) => s.trim().isNotEmpty)
-          .toList();
+      RegExp sentenceEnd = RegExp(r'(?<!\d)[.!?](?=\s|$)');
+      var matches = sentenceEnd.allMatches(currentText).toList();
+      debugPrint('[TTS] Found ${matches.length} sentence endings');
 
-        if (parts.length > 1) {
-          // Take all complete sentences
-          String toSpeak = parts.sublist(0, parts.length - 1)
-            .map((s) => s.trim() + '.')  // Add back the delimiter
-            .join(' ')
-            .trim();
+      // Only process if we have at least one complete sentence
+      if (matches.isNotEmpty) {
+        // Find the last complete sentence
+        int lastMatchEnd = matches.last.end;
+        String toSpeak = currentText.substring(0, lastMatchEnd).trim();
+        String remaining = currentText.substring(lastMatchEnd).trim();
 
-          if (toSpeak.isNotEmpty) {
-            _ttsQueue.add(toSpeak);
-            // Start processing if not already doing so
-            if (!_isProcessingTts) {
-              _processNextInQueue();
-            }
+        debugPrint('[TTS] Complete sentence to speak: """$toSpeak"""');
+        debugPrint('[TTS] Remaining text: """$remaining"""');
+
+        if (toSpeak.isNotEmpty) {
+          // Clear buffer and store remaining text
+          _currentTtsBuffer.clear();
+          if (remaining.isNotEmpty) {
+            _currentTtsBuffer.write(remaining);
           }
 
-          // Keep the incomplete sentence in the buffer
-          _currentBuffer.clear();
-          _currentBuffer.write(parts.last.trim());
+          // Speak the complete sentences
+          await speak(toSpeak);
+          debugPrint('[TTS] After speaking, buffer contains: """${_currentTtsBuffer.toString()}"""');
         }
       }
     } catch (e) {
-      LogUtils.log('[TTS] Error buffering text: $e');
+      debugPrint('[TTS] Error in bufferText: $e');
+      throwServiceError(e);
     }
   }
 
-  Future<void> finishSpeaking() async {
-    if (_currentBuffer.isEmpty) return;
-
-    try {
-      String remainingText = _currentBuffer.toString().trim();
-      _currentBuffer.clear();
-      if (remainingText.isNotEmpty) {
-        _ttsQueue.add(remainingText);
-        if (!_isProcessingTts) {
-          _processNextInQueue();
-        }
-      }
-    } catch (e) {
-      debugPrint('[TTS] Error in finish speaking: $e');
-      await _resetTtsState();
-    }
-  }
-
-  Future<void> _processNextInQueue() async {
-    if (_ttsQueue.isEmpty || _isProcessingTts || _isSpeaking) return;
-
-    try {
-      _isProcessingTts = true;
-
-      while (_ttsQueue.isNotEmpty) {
-        String text = _ttsQueue.first;
-
-        // Clean the text only for TTS, not display
-        final cleanedText = _cleanTextForTts(text);
-        LogUtils.log('[TTS] Speaking chunk (${cleanedText.length} chars):');
-        LogUtils.log('[TTS] Raw text for TTS: """$text"""');
-        LogUtils.log('[TTS] Cleaned text for TTS: """$cleanedText"""');
-
-        _isSpeaking = true;
-        await _tts.speak(cleanedText);
-        await _tts.awaitSpeakCompletion(true);
-        _isSpeaking = false;
-
-        // Remove the processed text from queue
-        _ttsQueue.removeAt(0);
-        _lastChunkTime = DateTime.now();
-      }
-
-      // All chunks processed
-      if (_ttsQueue.isEmpty) {
-        LogUtils.log('[TTS] Completed final chunk, triggering completion');
-        await _resetTtsState();
-        onTtsQueueComplete();
-      }
-    } catch (e) {
-      LogUtils.log('[TTS] Error processing TTS chunk: $e');
-      await _resetTtsState();
-    } finally {
-      _isProcessingTts = false;
-      _isSpeaking = false;
-    }
-  }
-
-  Future<void> _resetTtsState() async {
-    _isProcessingTts = false;
-    _isSpeaking = false;
-    _currentBuffer.clear();
+  @override
+  void dispose() {
+    debugPrint('[TTS] Disposing voice service');
+    _tts.stop();
+    _currentTtsBuffer.clear();
     _ttsQueue.clear();
-    await _tts.stop();
-  }
-
-  Future<void> stopSpeaking() async {
-    debugPrint('[TTS] Stopping all speech');
-    await _resetTtsState();
-  }
-
-  void setTtsCompleteCallback(Function callback) {
-    _onTtsComplete = callback;
-  }
-
-  void onTtsQueueComplete() {
-    debugPrint('[TTS] All queued text has been spoken');
-    if (!_isMuted) {
-      _onTtsComplete?.call();
-    }
-  }
-
-  void setStateChangeCallback(Function callback) {
-    _onStateChange = callback;
+    _hasMoreContent = false;
+    _isSpeaking = false;
+    super.dispose();
   }
 }

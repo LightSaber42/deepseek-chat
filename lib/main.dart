@@ -55,14 +55,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
-      create: (_) => ChatProvider(
-        DeepSeekService(
-          apiKey: const String.fromEnvironment('DEEPSEEK_API_KEY', defaultValue: ''),
-          baseUrl: 'https://api.deepseek.com/v1',
-        ),
-        OpenRouterService(),
-        VoiceService(),
-      ),
+      create: (_) => ChatProvider(),
       child: MaterialApp(
         title: 'AI Chat',
         theme: ThemeData(

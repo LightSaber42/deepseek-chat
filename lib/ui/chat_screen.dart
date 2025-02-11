@@ -3,9 +3,17 @@ import 'package:provider/provider.dart';
 import '../providers/chat_provider.dart';
 import 'chat_bubble.dart';
 import 'settings_screen.dart';
+import 'debug_window.dart';
 
-class ChatScreen extends StatelessWidget {
+class ChatScreen extends StatefulWidget {
   const ChatScreen({Key? key}) : super(key: key);
+
+  @override
+  State<ChatScreen> createState() => _ChatScreenState();
+}
+
+class _ChatScreenState extends State<ChatScreen> {
+  bool _showDebug = false;
 
   @override
   Widget build(BuildContext context) {
@@ -58,36 +66,54 @@ class ChatScreen extends StatelessWidget {
             icon: const Icon(Icons.history),
             onPressed: () => _showSessionHistory(context),
           ),
+          IconButton(
+            icon: const Icon(Icons.bug_report),
+            onPressed: () => setState(() => _showDebug = !_showDebug),
+            color: _showDebug ? Colors.green : null,
+          ),
         ],
       ),
-      body: Column(
+      body: Stack(
         children: [
-          Expanded(
-            child: Consumer<ChatProvider>(
-              builder: (context, provider, _) {
-                return ListView.builder(
-                  reverse: true,
-                  itemCount: provider.messages.length,
-                  itemBuilder: (context, index) {
-                    final message = provider.messages.reversed.toList()[index];
-                    return ChatBubble(
-                      message: message,
-                      isResponding: provider.isResponding && index == 0,
+          Column(
+            children: [
+              Expanded(
+                child: Consumer<ChatProvider>(
+                  builder: (context, provider, _) {
+                    return ListView.builder(
+                      reverse: true,
+                      itemCount: provider.messages.length,
+                      itemBuilder: (context, index) {
+                        final message = provider.messages.reversed.toList()[index];
+                        return ChatBubble(
+                          message: message,
+                          isResponding: provider.isResponding && index == 0,
+                        );
+                      },
                     );
-                  },
-                );
-              }
-            ),
+                  }
+                ),
+              ),
+              _buildInputControls(context),
+            ],
           ),
-          _buildInputControls(context),
+          if (_showDebug)
+            Positioned(
+              right: 16,
+              top: 16,
+              child: Consumer<ChatProvider>(
+                builder: (context, provider, _) => DebugWindow(
+                  messages: provider.debugMessages,
+                  onClose: () => setState(() => _showDebug = false),
+                ),
+              ),
+            ),
         ],
       ),
     );
   }
 
   Widget _buildInputControls(BuildContext context) {
-    final provider = Provider.of<ChatProvider>(context, listen: false);
-
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: Row(
@@ -100,7 +126,7 @@ class ChatScreen extends StatelessWidget {
               ),
               onSubmitted: (text) {
                 if (text.isNotEmpty) {
-                  provider.sendMessage(text);
+                  Provider.of<ChatProvider>(context, listen: false).sendMessage(text);
                 }
               },
             ),
@@ -108,14 +134,14 @@ class ChatScreen extends StatelessWidget {
           SizedBox(width: 16),
           Consumer<ChatProvider>(
             builder: (context, provider, _) => SizedBox(
-              width: 120,  // Increased from 80 to 120
-              height: 120, // Increased from 80 to 120
+              width: 120,
+              height: 120,
               child: FloatingActionButton(
-                onPressed: () => provider.toggleVoiceInput(),
+                onPressed: provider.isInitialized ? () => provider.toggleVoiceInput() : null,
                 backgroundColor: provider.isListening ? Colors.red : Theme.of(context).colorScheme.primaryContainer,
                 child: Icon(
                   provider.isListening ? Icons.mic_off : Icons.mic,
-                  size: 60,  // Increased from 40 to 60
+                  size: 60,
                 ),
               ),
             ),

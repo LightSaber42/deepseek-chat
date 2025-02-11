@@ -3,14 +3,18 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:dart_openai/dart_openai.dart';
+import 'base_llm_service.dart';
 
-class DeepSeekService {
-  String _apiKey;
+class DeepSeekService extends BaseLLMService {
   final String _baseUrl;
-  String _model;
   late OpenAI _client;
+  String _apiKey;
+  String _model;
 
+  @override
   String get apiKey => _apiKey;
+
+  @override
   String get currentModel => _model;
 
   DeepSeekService({
@@ -27,27 +31,35 @@ class DeepSeekService {
     debugPrint('OpenAI client initialized with base URL: $baseUrl');
   }
 
+  @override
   Future<void> setModel(String model) async {
     if (model != 'deepseek-chat' && model != 'deepseek-reasoner') {
-      throw Exception('Invalid model name. Must be deepseek-chat or deepseek-reasoner');
+      throwServiceError('Invalid model name. Must be deepseek-chat or deepseek-reasoner',
+          code: 'invalid_model');
     }
     _model = model;
     debugPrint('Model set to: $_model');
   }
 
+  @override
   Future<void> updateApiKey(String newApiKey) async {
     _apiKey = newApiKey;
     OpenAI.apiKey = newApiKey;
     final isValid = await testConnection();
     if (!isValid) {
-      throw Exception('Invalid API key');
+      throwServiceError('Invalid API key', code: 'invalid_api_key');
     }
   }
 
-  Future<Stream<String>> sendMessage(List<Map<String, dynamic>> history) async {
+  @override
+  Future<Stream<String>> sendMessage(
+    List<Map<String, dynamic>> history, {
+    LLMServiceOptions? options,
+  }) async {
     try {
       debugPrint('[API] Sending request to DeepSeek with model: $_model');
-      debugPrint('[API] History: ${json.encode(history)}');
+      final formattedHistory = formatHistory(history);
+      debugPrint('[API] History: ${json.encode(formattedHistory)}');
 
       final uri = Uri.parse('${_baseUrl}/chat/completions');
       final request = http.Request('POST', uri);
@@ -56,16 +68,22 @@ class DeepSeekService {
         'Content-Type': 'application/json',
         'Accept': 'text/event-stream',
       });
-      request.body = json.encode({
+
+      final requestBody = {
         'model': _model,
-        'messages': history,
-        'max_tokens': 2000,
+        'messages': formattedHistory,
+        'max_tokens': options?.maxTokens ?? 2000,
+        'temperature': options?.temperature ?? 1.0,
         'stream': true,
-      });
+        if (options?.additionalOptions != null) ...options!.additionalOptions!,
+      };
+
+      request.body = json.encode(requestBody);
 
       final streamedResponse = await http.Client().send(request);
       if (streamedResponse.statusCode != 200) {
-        throw Exception('API returned ${streamedResponse.statusCode}');
+        throwServiceError('API returned ${streamedResponse.statusCode}',
+            code: 'api_error_${streamedResponse.statusCode}');
       }
 
       // Create a StreamController to handle the response stream
@@ -83,6 +101,11 @@ class DeepSeekService {
 
                 try {
                   final json = jsonDecode(data);
+                  if (!validateResponseFormat(json)) {
+                    debugPrint('[ERROR] Invalid response format');
+                    return;
+                  }
+
                   final delta = json['choices'][0]['delta'];
 
                   // Both models use the same format according to docs
@@ -109,7 +132,7 @@ class DeepSeekService {
             onDone: () => controller.close(),
             onError: (error) {
               debugPrint('[ERROR] Error in stream: $error');
-              controller.addError(error);
+              controller.addError(LLMServiceException('Stream error', originalError: error));
               controller.close();
             },
           );
@@ -117,10 +140,11 @@ class DeepSeekService {
       return controller.stream;
     } catch (e) {
       debugPrint('[ERROR] Error in sendMessage: $e');
-      rethrow;
+      throwServiceError(e);
     }
   }
 
+  @override
   Future<bool> testConnection() async {
     try {
       debugPrint('[TEST] Testing connection with model: $_model');
@@ -151,9 +175,7 @@ class DeepSeekService {
       if (response.statusCode == 200) {
         try {
           final jsonResponse = json.decode(response.body);
-          if (jsonResponse['choices'] != null &&
-              jsonResponse['choices'].isNotEmpty &&
-              jsonResponse['choices'][0]['message'] != null) {
+          if (validateResponseFormat(jsonResponse)) {
             debugPrint('[TEST] Connection successful');
             return true;
           }
@@ -171,6 +193,7 @@ class DeepSeekService {
     }
   }
 
+  @override
   Future<String?> getAccountBalance() async {
     try {
       final uri = Uri.parse('${_baseUrl}/dashboard/billing/credit_grants');
