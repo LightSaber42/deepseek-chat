@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/chat_provider.dart';
+import '../services/system_tts_service.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({Key? key}) : super(key: key);
@@ -26,6 +27,72 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _openrouterApiKeyController.text = provider.openrouterApiKey;
     _customModelController.text = provider.customOpenrouterModel;
   }
+
+Widget _buildTTSEngineSelector(ChatProvider provider) {
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      const Text(
+        'TTS Engine',
+        style: TextStyle(
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      const SizedBox(height: 8),
+      FutureBuilder<List<dynamic>>(
+        future: SystemTTSService.getAvailableEngines(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const CircularProgressIndicator();
+          }
+
+          if (snapshot.hasError || !snapshot.hasData) {
+            return const Text('Error loading TTS engines');
+          }
+
+          final engines = snapshot.data!;
+          if (engines.isEmpty) {
+            return const Text('No TTS engines available');
+          }
+
+          // Get current value from provider
+          final currentValue = engines.contains(provider.ttsEngine)
+              ? provider.ttsEngine
+              : engines.contains('com.google.android.tts')
+                  ? 'com.google.android.tts'
+                  : engines.first;
+
+          return DropdownButtonFormField<String>(
+            value: currentValue,
+            decoration: const InputDecoration(
+              border: OutlineInputBorder(),
+              labelText: 'Select TTS Engine',
+            ),
+            items: engines.map((engine) {
+              final name = engine.toString();
+              if (name == 'flutter_tts') {
+                return DropdownMenuItem(
+                  value: name,
+                  child: const Text('Flutter TTS (Original)'),
+                );
+              }
+              return DropdownMenuItem(
+                value: name,
+                child: Text(name.replaceAll('com.', '').replaceAll('.tts', '')),
+              );
+            }).toList(),
+            onChanged: (value) {
+              if (value != null) {
+                provider.updateTTSEngine(value);
+              }
+            },
+          );
+        },
+      ),
+    ],
+  );
+}
 
   @override
   void dispose() {
@@ -129,6 +196,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                 ],
               ),
+            ),
+            const SizedBox(height: 24),
+            Consumer<ChatProvider>(
+              builder: (context, provider, child) => _buildTTSEngineSelector(provider),
             ),
             const SizedBox(height: 24),
             const Text(

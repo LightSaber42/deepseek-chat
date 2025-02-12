@@ -43,13 +43,13 @@ class TTSServiceOptions {
 
 /// Abstract base class for TTS service implementations
 abstract class BaseTTSService {
-  bool _isSpeaking = false;
-  bool _isMuted = false;
+  @protected
+  bool isSpeaking = false;
+  @protected
+  bool isMuted = false;
   final StreamController<String> _ttsController = StreamController<String>.broadcast();
   final List<String> _ttsQueue = [];
 
-  bool get isSpeaking => _isSpeaking;
-  bool get isMuted => _isMuted;
   bool get isListening;  // Each implementation must provide this
   Stream<String> get ttsStream => _ttsController.stream;
 
@@ -82,8 +82,8 @@ abstract class BaseTTSService {
 
   /// Toggles mute state
   void toggleMute() {
-    _isMuted = !_isMuted;
-    if (_isMuted && _isSpeaking) {
+    isMuted = !isMuted;
+    if (isMuted && isSpeaking) {
       stop();
     }
   }
@@ -92,6 +92,19 @@ abstract class BaseTTSService {
   @protected
   String cleanTextForTTS(String text) {
     debugPrint('[TTS] Text before TTS cleaning: """$text"""');
+
+    // Remove markdown formatting
+    text = text
+      .replaceAll(RegExp(r'\*\*(.*?)\*\*'), r'$1')  // Bold
+      .replaceAll(RegExp(r'\*(.*?)\*'), r'$1')      // Italic
+      .replaceAll(RegExp(r'`(.*?)`'), r'$1')        // Code
+      .replaceAll(RegExp(r'\[(.*?)\]\(.*?\)'), r'$1')  // Links
+      .replaceAll(RegExp(r'#{1,6}\s'), '')         // Headers
+      .replaceAll('```', '')                       // Code blocks
+      .replaceAll('>', '')                         // Blockquotes
+      .replaceAll('-', '')                         // List items
+      .replaceAll('*', '')                         // List items
+      .replaceAll('_', ' ');                       // Underscores
 
     // Basic space normalization
     text = text.replaceAll(RegExp(r'\s{3,}'), ' ').trim();

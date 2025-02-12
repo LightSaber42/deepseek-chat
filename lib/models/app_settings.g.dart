@@ -23,13 +23,14 @@ class AppSettingsAdapter extends TypeAdapter<AppSettings> {
       selectedModel: fields[3] as String,
       openrouterApiKey: fields[4] as String,
       customOpenrouterModel: fields[5] as String,
+      ttsEngine: fields[6] as String?,
     );
   }
 
   @override
   void write(BinaryWriter writer, AppSettings obj) {
     writer
-      ..writeByte(6)
+      ..writeByte(7)
       ..writeByte(0)
       ..write(obj.apiKey)
       ..writeByte(1)
@@ -41,7 +42,9 @@ class AppSettingsAdapter extends TypeAdapter<AppSettings> {
       ..writeByte(4)
       ..write(obj.openrouterApiKey)
       ..writeByte(5)
-      ..write(obj.customOpenrouterModel);
+      ..write(obj.customOpenrouterModel)
+      ..writeByte(6)
+      ..write(obj.ttsEngine);
   }
 
   @override

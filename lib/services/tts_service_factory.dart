@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'base_tts_service.dart';
 import 'voice_service.dart';
+import 'system_tts_service.dart';
 
 /// Enum representing available TTS providers
 enum TTSProvider {
@@ -14,14 +15,20 @@ class TTSServiceFactory {
   static BaseTTSService createService({
     required TTSProvider provider,
     TTSServiceOptions? options,
+    String? engine,
   }) {
     switch (provider) {
       case TTSProvider.system:
-        final service = VoiceService();
-        if (options != null) {
-          service.updateOptions(options);
+        if (engine == 'flutter_tts') {
+          return SystemTTSService(
+            options: options ?? getDefaultOptions(provider),
+            engine: 'flutter_tts',
+          );
         }
-        return service;
+        return SystemTTSService(
+          options: options ?? getDefaultOptions(provider),
+          engine: engine ?? "com.google.android.tts",
+        );
     }
   }
 
@@ -37,8 +44,8 @@ class TTSServiceFactory {
     switch (provider) {
       case TTSProvider.system:
         return const TTSServiceOptions(
-          rate: 0.54,  // 54% of normal speed for better comprehension
-          pitch: 0.9,
+          rate: 0.5,  // Slower rate for more natural speech
+          pitch: 1.0,
           volume: 1.0,
           language: 'en-US',
         );
