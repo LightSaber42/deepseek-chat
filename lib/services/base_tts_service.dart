@@ -93,17 +93,24 @@ abstract class BaseTTSService {
   String cleanTextForTTS(String text) {
     debugPrint('[TTS] Text before TTS cleaning: """$text"""');
 
-    // Simple markdown cleanup
+    // Simple markdown cleanup - using basic replacements to avoid regex errors
     text = text
-      .replaceAll(RegExp(r'\*\*'), '')        // Remove all **
-      .replaceAll(RegExp(r'#{1,6}'), '')      // Remove all #
-      .replaceAll(RegExp(r'(?m)^-(?!\d)'), '') // Remove - at start of line if not followed by digit
-      .replaceAll(RegExp(r'`'), '')           // Remove all backticks
-      .replaceAll(RegExp(r'\[.*?\]\(.*?\)'), '') // Remove links
-      .replaceAll('```', '')                  // Remove code blocks
-      .replaceAll('>', '')                    // Remove blockquotes
-      .replaceAll('*', '')                    // Remove asterisks
-      .replaceAll('_', ' ');                  // Replace underscores with space
+      .replaceAll('**', '')          // Remove bold
+      .replaceAll('#', '')           // Remove headers
+      .replaceAll('`', '')           // Remove backticks
+      .replaceAll('```', '')         // Remove code blocks
+      .replaceAll('>', '')           // Remove blockquotes
+      .replaceAll('*', '')           // Remove asterisks
+      .replaceAll('_', ' ')          // Replace underscores with space
+      .replaceAll('[', '')           // Remove link brackets
+      .replaceAll(']', '')           // Remove link brackets
+      .replaceAll('(', '')           // Remove link parentheses
+      .replaceAll(')', '');          // Remove link parentheses
+
+    // Handle bullet points at start of lines (split, clean, rejoin)
+    text = text.split('\n')
+      .map((line) => line.startsWith('- ') ? line.substring(2) : line)
+      .join('\n');
 
     // Basic space normalization
     text = text.replaceAll(RegExp(r'\s{2,}'), ' ').trim();
@@ -114,24 +121,6 @@ abstract class BaseTTSService {
       (match) => '${match.group(1)!}.${match.group(2)!}'
     );
 
-    // Fix contractions and possessives
-    text = text
-      .replaceAll(" 's", "'s")
-      .replaceAll(" 't", "'t")
-      .replaceAll(" 'll", "'ll")
-      .replaceAll(" 've", "'ve")
-      .replaceAll(" 're", "'re")
-      .replaceAll(" 'd", "'d")
-      .replaceAll(" 'm", "'m");
-
-    // Fix spaces around punctuation
-    text = text
-      .replaceAll('  ,', ',')
-      .replaceAll('  .', '.')
-      .replaceAll('  !', '!')
-      .replaceAll('  ?', '?')
-      .replaceAll('  :', ':')
-      .replaceAll('  ;', ';');
 
     // Add spaces after punctuation if missing
     text = text.replaceAllMapped(

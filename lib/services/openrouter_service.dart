@@ -38,30 +38,30 @@ class OpenRouterService extends BaseLLMService {
     LLMServiceOptions? options,
   }) async {
     try {
-      final url = Uri.parse('$_baseUrl/chat/completions');
-      final headers = {
-        'Authorization': 'Bearer $_apiKey',
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://github.com/yourusername/deepseek-frontend',
-      };
-
+      debugPrint('[API] Sending request to OpenRouter with model: $_selectedModel');
       final formattedMessages = formatHistory(messages);
-      debugPrint('[OpenRouter] Sending request with messages: ${formattedMessages.length} messages');
-      debugPrint('[OpenRouter] First message role: ${formattedMessages.first['role']}');
-      debugPrint('[OpenRouter] System prompt: ${formattedMessages.first['content'].substring(0, min<int>(50, formattedMessages.first['content'].length))}...');
-      debugPrint('[OpenRouter] Using model: $_selectedModel');
 
       final requestBody = {
         'model': _selectedModel,
         'messages': formattedMessages,
-        'stream': true,
         'max_tokens': options?.maxTokens ?? 2000,
         'temperature': options?.temperature ?? 1.0,
+        'stream': true,
         if (options?.additionalOptions != null) ...options!.additionalOptions!,
       };
 
-      final request = http.Request('POST', url);
-      request.headers.addAll(headers);
+      debugPrint('[API] Request JSON:\n${const JsonEncoder.withIndent('  ').convert(requestBody)}');
+
+      final uri = Uri.parse('$_baseUrl/chat/completions');
+      final request = http.Request('POST', uri);
+      request.headers.addAll({
+        'Authorization': 'Bearer $_apiKey',
+        'Content-Type': 'application/json',
+        'Accept': 'text/event-stream',
+        'HTTP-Referer': 'https://github.com/microsofthackathons/deepseek-frontend',
+        'X-Title': 'DeepSeek Frontend'
+      });
+
       request.body = jsonEncode(requestBody);
 
       final response = await http.Client().send(request);
@@ -139,44 +139,55 @@ class OpenRouterService extends BaseLLMService {
   @override
   Future<bool> testConnection() async {
     try {
-      final url = Uri.parse('$_baseUrl/chat/completions');
+      debugPrint('[TEST] Testing connection with model: $_selectedModel');
+
+      final uri = Uri.parse('$_baseUrl/chat/completions');
+      debugPrint('[TEST] Sending test request to: $uri');
+
+      final requestBody = {
+        'model': _selectedModel,
+        'messages': [
+          {
+            'role': 'user',
+            'content': 'Hello'
+          }
+        ],
+        'max_tokens': 50
+      };
+
+      debugPrint('[TEST] Request JSON:\n${const JsonEncoder.withIndent('  ').convert(requestBody)}');
+
       final response = await http.post(
-        url,
+        uri,
         headers: {
           'Authorization': 'Bearer $_apiKey',
           'Content-Type': 'application/json',
-          'HTTP-Referer': 'https://github.com/yourusername/deepseek-frontend',
+          'HTTP-Referer': 'https://github.com/microsofthackathons/deepseek-frontend',
+          'X-Title': 'DeepSeek Frontend'
         },
-        body: jsonEncode({
-          'model': _selectedModel,
-          'messages': [
-            {
-              'role': 'user',
-              'content': 'Hello'
-            }
-          ],
-          'stream': false,
-        }),
+        body: json.encode(requestBody),
       );
 
-      LogUtils.log('[TEST] OpenRouter response status code: ${response.statusCode}');
+      debugPrint('[TEST] Response status code: ${response.statusCode}');
+      debugPrint('[TEST] Response JSON:\n${const JsonEncoder.withIndent('  ').convert(json.decode(response.body))}');
+
       if (response.statusCode == 200) {
         try {
-          final jsonResponse = jsonDecode(response.body);
+          final jsonResponse = json.decode(response.body);
           if (validateResponseFormat(jsonResponse)) {
-            LogUtils.log('[TEST] OpenRouter connection successful');
+            debugPrint('[TEST] Connection successful');
             return true;
           }
         } catch (e) {
-          LogUtils.log('[ERROR] Failed to parse OpenRouter response: $e');
+          debugPrint('[ERROR] Failed to parse response: $e');
         }
       }
 
-      LogUtils.log('[ERROR] OpenRouter API returned non-200 status code: ${response.statusCode}');
-      LogUtils.log('[ERROR] Response body: ${response.body}');
+      debugPrint('[ERROR] API returned non-200 status code: ${response.statusCode}');
+      debugPrint('[ERROR] Response body: ${response.body}');
       return false;
     } catch (e) {
-      LogUtils.log('[ERROR] OpenRouter test connection error: $e');
+      debugPrint('[ERROR] Test connection error: $e');
       return false;
     }
   }

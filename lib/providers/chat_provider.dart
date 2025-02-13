@@ -32,7 +32,10 @@ class ChatProvider extends ChangeNotifier {
   bool _isProcessingTts = false;
   StringBuffer _currentTtsBuffer = StringBuffer();
   DateTime _lastChunkTime = DateTime.now();
-  static const double _charsPerSecond = 15.0;  // Approximate characters per second for TTS
+  static const double _baseCharsPerSecond = 15.0;  // Base rate for normal speed
+
+  // Calculate effective chars per second based on TTS speed
+  double get _charsPerSecond => _baseCharsPerSecond * (_getSettings().ttsSpeed * 2);  // Speed multiplier
 
   bool get isResponding => _isResponding;
   bool get isListening => _isInitialized && _ttsService != null ? _ttsService!.isListening : false;
@@ -231,55 +234,90 @@ class ChatProvider extends ChangeNotifier {
   }
 
   Future<void> _initializeLLMService(AppSettings settings) async {
-    // Determine which provider to use based on settings
-    if (settings.selectedModel.startsWith('deepseek')) {
-      _currentProvider = LLMProvider.deepseek;
-      if (settings.apiKey.isEmpty) {
-        debugPrint('[Settings] No DeepSeek API key found in settings');
-        return;
-      }
+    try {
+      // Clear existing service and debug messages
+      _llmService = null;
+      _debugMessages.clear();
+      _debugMessages.add('[INIT] Initializing LLM service...');
+      notifyListeners();
 
-      _llmService = LLMServiceFactory.createService(
-        provider: _currentProvider,
-        apiKey: settings.apiKey,
-        model: settings.selectedModel,
-      );
-    } else if (settings.selectedModel.startsWith('openrouter')) {
-      _currentProvider = LLMProvider.openRouter;
-      if (settings.openrouterApiKey.isEmpty) {
-        debugPrint('[Settings] No OpenRouter API key found in settings');
-        return;
-      }
-
-      String model = settings.selectedModel;
-      if (model == 'openrouter-custom') {
-        model = settings.customOpenrouterModel;
-      } else if (model == 'openrouter-deepseek-r1') {
-        model = 'deepseek/deepseek-r1';
-      } else if (model == 'openrouter-deepseek-r1-distill') {
-        model = 'deepseek/deepseek-r1-distill-llama-70b';
-      }
-
-      _llmService = LLMServiceFactory.createService(
-        provider: _currentProvider,
-        apiKey: settings.openrouterApiKey,
-        model: model,
-      );
-    }
-
-    // Test connection and update balance if service was initialized
-    if (_llmService != null) {
-      try {
-        if (await _llmService!.testConnection()) {
-          if (settings.selectedModel.startsWith('openrouter')) {
-            _accountBalance = await _llmService!.getAccountBalance();
-          } else {
-            _accountBalance = 'Not available for DeepSeek';
-          }
+      // Determine which provider to use based on settings
+      if (settings.selectedModel.startsWith('deepseek')) {
+        _currentProvider = LLMProvider.deepseek;
+        if (settings.apiKey.isEmpty) {
+          _debugMessages.add('[INIT] No DeepSeek API key found in settings');
+          notifyListeners();
+          return;
         }
-      } catch (e) {
-        debugPrint('[Settings] Error testing connection: $e');
+
+        _llmService = LLMServiceFactory.createService(
+          provider: _currentProvider,
+          apiKey: settings.apiKey,
+          model: settings.selectedModel,
+        );
+        _debugMessages.add('[INIT] Created DeepSeek service with model: ${settings.selectedModel}');
+        notifyListeners();
+      } else if (settings.selectedModel.startsWith('openrouter')) {
+        _currentProvider = LLMProvider.openRouter;
+        if (settings.openrouterApiKey.isEmpty) {
+          _debugMessages.add('[INIT] No OpenRouter API key found in settings');
+          notifyListeners();
+          return;
+        }
+
+        // Convert model name for OpenRouter
+        String modelName = settings.selectedModel;
+        if (modelName == 'openrouter-custom') {
+          modelName = settings.customOpenrouterModel;
+        } else if (modelName == 'openrouter-deepseek-r1') {
+          modelName = 'deepseek/deepseek-r1';
+        } else if (modelName == 'openrouter-deepseek-r1-distill') {
+          modelName = 'deepseek/deepseek-r1-distill-llama-70b';
+        }
+
+        _llmService = LLMServiceFactory.createService(
+          provider: _currentProvider,
+          apiKey: settings.openrouterApiKey,
+          model: modelName,
+        );
+        _debugMessages.add('[INIT] Created OpenRouter service with model: $modelName');
+        notifyListeners();
       }
+
+      // Test connection and update balance if service was initialized
+      if (_llmService != null) {
+        try {
+          _debugMessages.add('[INIT] Testing connection...');
+          notifyListeners();
+
+          final isConnected = await _llmService!.testConnection();
+          if (isConnected) {
+            _debugMessages.add('[INIT] Connection test successful');
+            notifyListeners();
+
+            if (settings.selectedModel.startsWith('openrouter')) {
+              _debugMessages.add('[INIT] Fetching OpenRouter balance...');
+              notifyListeners();
+              _accountBalance = await _llmService!.getAccountBalance();
+              _debugMessages.add('[INIT] Balance: $_accountBalance');
+            } else {
+              _accountBalance = 'Not available for DeepSeek';
+              _debugMessages.add('[INIT] Balance check skipped for DeepSeek');
+            }
+          } else {
+            _debugMessages.add('[INIT] Connection test failed');
+          }
+          notifyListeners();
+        } catch (e) {
+          _debugMessages.add('[INIT] Error testing connection: $e');
+          notifyListeners();
+          debugPrint('[Settings] Error testing connection: $e');
+        }
+      }
+    } catch (e) {
+      _debugMessages.add('[INIT] Error initializing LLM service: $e');
+      notifyListeners();
+      debugPrint('[Settings] Error initializing LLM service: $e');
     }
   }
 
@@ -318,19 +356,26 @@ class ChatProvider extends ChangeNotifier {
       await _settingsBox!.put(0, settings);
       debugPrint('[Settings] Saved DeepSeek API key to Hive');
 
-      // Only update service if it exists
+      // Re-initialize the LLM service with new settings
+      await _initializeLLMService(settings);
+
+      // Only test connection if service was initialized
       if (_llmService != null) {
-        await _llmService!.updateApiKey(apiKey);
-        await refreshBalance();
-      } else {
-        // Initialize service if it doesn't exist
-        await _initializeLLMService(settings);
+        try {
+          final isConnected = await _llmService!.testConnection();
+          if (!isConnected) {
+            debugPrint('[Settings] API key test failed');
+          }
+        } catch (e) {
+          debugPrint('[Settings] Error testing API key: $e');
+          // Don't rethrow - just log the error
+        }
       }
 
       notifyListeners();
     } catch (e) {
-      debugPrint('[Settings] Error saving DeepSeek API key: $e');
-      rethrow;
+      debugPrint('[Settings] Error updating API key: $e');
+      // Don't rethrow - allow the app to continue
     }
   }
 
@@ -372,34 +417,32 @@ class ChatProvider extends ChangeNotifier {
     settings.selectedModel = model;
     await _settingsBox?.put(0, settings);
 
-    // If switching to OpenRouter, ensure we have the API key set
-    if (model.startsWith('openrouter') && settings.openrouterApiKey.isNotEmpty) {
-      await _llmService!.updateApiKey(settings.openrouterApiKey);
-    }
+    // Reinitialize LLM service with new settings but preserve API keys
+    await _initializeLLMService(settings);
 
+    // Update balance display based on provider
     if (model.startsWith('openrouter')) {
-      if (model == 'openrouter-custom') {
-        await _llmService!.updateApiKey(settings.openrouterApiKey);
-      } else if (model == 'openrouter-deepseek-r1') {
-        await _llmService!.updateApiKey('deepseek/deepseek-r1');
-      } else if (model == 'openrouter-deepseek-r1-distill') {
-        await _llmService!.updateApiKey('deepseek/deepseek-r1-distill-llama-70b');
-      }
-      // Only fetch balance for OpenRouter
       await refreshBalance();
     } else {
-      // For DeepSeek models, use the stored API key
-      if (settings.apiKey.isNotEmpty) {
-        await _llmService!.updateApiKey(settings.apiKey);
-      }
       _accountBalance = 'Not available for DeepSeek';
       notifyListeners();
     }
 
-    // Only refresh balance if switching between services
-    if (model.startsWith('openrouter') != previousModel.startsWith('openrouter')) {
-      await refreshBalance();
+    // Reinitialize TTS service with current speed
+    if (_ttsService != null) {
+      _ttsService = TTSServiceFactory.createService(
+        provider: TTSProvider.system,
+        options: TTSServiceOptions(
+          rate: settings.ttsSpeed,
+          pitch: 1.0,
+          volume: 1.0,
+          language: 'en-US',
+        ),
+        engine: settings.ttsEngine,
+      );
+      await _ttsService!.init();
     }
+
     notifyListeners();
   }
 
@@ -476,26 +519,32 @@ class ChatProvider extends ChangeNotifier {
   }
 
   Future<void> sendMessage(String message) async {
-    if (!_isInitialized || _llmService == null || _ttsService == null) {
-      debugPrint('[Chat] Cannot send message - services not initialized');
-      return;
+    if (!_isInitialized || message.trim().isEmpty) return;
+
+    // Clear previous messages if this is a new conversation
+    if (_messages.isEmpty) {
+      clearMessages();
     }
 
-    if (message.trim().isEmpty) return;
-
-    try {
-      // Stop listening before processing message
+    // Stop any ongoing speech and listening
+    if (_ttsService != null) {
+      await _ttsService!.stopSpeaking();
       if (_ttsService!.isListening) {
         await _ttsService!.stopListening();
       }
+    }
 
+    _isResponding = true;
+    notifyListeners();
+
+    // Add user message
+    final userMessage = ChatMessage(role: 'user', content: message);
+    _messages.add(userMessage);
+    _history.add(userMessage);
+    notifyListeners();
+
+    try {
       _debugMessages.clear();
-      _isResponding = true;
-      final userMessage = ChatMessage(role: 'user', content: message);
-      _messages.add(userMessage);
-      _history.add(userMessage);
-      notifyListeners();
-
       var currentReasoningBuffer = StringBuffer();
       var currentResponseBuffer = StringBuffer();
       var isInReasoning = false;
@@ -574,12 +623,14 @@ class ChatProvider extends ChangeNotifier {
             reasoningMessage.content = '[Reasoning]\n${currentReasoningBuffer.toString()}';
             notifyListeners();
           }
+          debugPrint('[API] Reasoning content: $chunk');
         } else {
           // Update display immediately without waiting for TTS
           if (responseMessage != null) {
             currentResponseBuffer.write(chunk);
             responseMessage.content = currentResponseBuffer.toString();
             notifyListeners();
+            debugPrint('[API] Response content: $chunk');
 
             // Queue the chunk for TTS without waiting
             _ttsController.add(chunk);
@@ -631,12 +682,23 @@ class ChatProvider extends ChangeNotifier {
   Future<bool> testApiConnection() async {
     try {
       final settings = _getSettings() ?? AppSettings.defaults();
-      final isConnected = settings.selectedModel.startsWith('openrouter')
-          ? await _llmService!.testConnection()
-          : await _llmService!.testConnection();
+      _debugMessages.clear();
+      _debugMessages.add('[TEST] Testing connection to ${settings.selectedModel}...');
+      notifyListeners();
+
+      final isConnected = await _llmService!.testConnection();
+
+      if (isConnected) {
+        _debugMessages.add('[TEST] Connection successful');
+      } else {
+        _debugMessages.add('[TEST] Connection failed - API returned unsuccessful status');
+      }
+      notifyListeners();
       return isConnected;
     } catch (e) {
       debugPrint('Error testing API connection: $e');
+      _debugMessages.add('[TEST] Connection error: $e');
+      notifyListeners();
       return false;
     }
   }
@@ -657,6 +719,7 @@ class ChatProvider extends ChangeNotifier {
 
   void clearMessages() {
     _messages.clear();
+    _history.clear();  // Clear history as well
     if (_ttsService != null) {
       _ttsService!.stopSpeaking();
     }

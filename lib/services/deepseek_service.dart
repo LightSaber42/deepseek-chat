@@ -59,15 +59,6 @@ class DeepSeekService extends BaseLLMService {
     try {
       debugPrint('[API] Sending request to DeepSeek with model: $_model');
       final formattedHistory = formatHistory(history);
-      debugPrint('[API] History: ${json.encode(formattedHistory)}');
-
-      final uri = Uri.parse('${_baseUrl}/chat/completions');
-      final request = http.Request('POST', uri);
-      request.headers.addAll({
-        'Authorization': 'Bearer $_apiKey',
-        'Content-Type': 'application/json',
-        'Accept': 'text/event-stream',
-      });
 
       final requestBody = {
         'model': _model,
@@ -77,6 +68,16 @@ class DeepSeekService extends BaseLLMService {
         'stream': true,
         if (options?.additionalOptions != null) ...options!.additionalOptions!,
       };
+
+      debugPrint('[API] Request JSON:\n${const JsonEncoder.withIndent('  ').convert(requestBody)}');
+
+      final uri = Uri.parse('${_baseUrl}/chat/completions');
+      final request = http.Request('POST', uri);
+      request.headers.addAll({
+        'Authorization': 'Bearer $_apiKey',
+        'Content-Type': 'application/json',
+        'Accept': 'text/event-stream',
+      });
 
       request.body = json.encode(requestBody);
 
@@ -108,7 +109,7 @@ class DeepSeekService extends BaseLLMService {
 
                   final delta = json['choices'][0]['delta'];
 
-                  // Both models use the same format according to docs
+                  // Handle reasoning content
                   if (delta.containsKey('reasoning_content')) {
                     final reasoningContent = delta['reasoning_content'];
                     if (reasoningContent != null && reasoningContent.isNotEmpty) {
@@ -117,7 +118,10 @@ class DeepSeekService extends BaseLLMService {
                       controller.add(reasoningContent);
                       controller.add('🤔REASONING_END🤔');
                     }
-                  } else if (delta.containsKey('content')) {
+                  }
+
+                  // Handle regular content
+                  if (delta.containsKey('content')) {
                     final content = delta['content'];
                     if (content != null && content.isNotEmpty) {
                       debugPrint('[API] Content: $content');
@@ -152,25 +156,30 @@ class DeepSeekService extends BaseLLMService {
       final uri = Uri.parse('${_baseUrl}/chat/completions');
       debugPrint('[TEST] Sending test request to: $uri');
 
+      final requestBody = {
+        'model': _model,
+        'messages': [
+          {
+            'role': 'user',
+            'content': 'Hello'
+          }
+        ],
+        'max_tokens': 50
+      };
+
+      debugPrint('[TEST] Request JSON:\n${const JsonEncoder.withIndent('  ').convert(requestBody)}');
+
       final response = await http.post(
         uri,
         headers: {
           'Authorization': 'Bearer $_apiKey',
           'Content-Type': 'application/json',
         },
-        body: json.encode({
-          'model': _model,
-          'messages': [
-            {
-              'role': 'user',
-              'content': 'Hello'
-            }
-          ],
-          'max_tokens': 50
-        }),
+        body: json.encode(requestBody),
       );
 
       debugPrint('[TEST] Response status code: ${response.statusCode}');
+      debugPrint('[TEST] Response JSON:\n${const JsonEncoder.withIndent('  ').convert(json.decode(response.body))}');
 
       if (response.statusCode == 200) {
         try {
