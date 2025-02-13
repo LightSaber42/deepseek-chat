@@ -133,8 +133,12 @@ class ChatProvider extends ChangeNotifier {
           try {
             if (_ttsService != null) {
               await _ttsService!.bufferText(text);
-              // Wait for completion before next chunk
-              await Future.delayed(const Duration(milliseconds: 100));
+              // Wait for the speech to complete before removing from queue
+              while (_ttsService!.isSpeaking) {
+                await Future.delayed(const Duration(milliseconds: 100));
+              }
+              // Add a small pause between chunks
+              await Future.delayed(const Duration(milliseconds: 200));
             }
           } catch (e) {
             debugPrint('[Chat] Error during TTS: $e');
@@ -148,11 +152,13 @@ class ChatProvider extends ChangeNotifier {
         final remainingText = _currentTtsBuffer.toString().trim();
         if (remainingText.isNotEmpty &&
             !remainingText.contains('REASONING_START') &&
-            !remainingText.contains('SPLIT_MESSAGE') &&
-            !_ttsQueue.contains(remainingText)) {  // Check for duplicates
+            !remainingText.contains('SPLIT_MESSAGE')) {
           debugPrint('[Chat] Speaking final buffer (${remainingText.length} chars):\n$remainingText');
           await _ttsService?.bufferText(remainingText);
-          await Future.delayed(const Duration(milliseconds: 100));
+          // Wait for final speech to complete
+          while (_ttsService?.isSpeaking ?? false) {
+            await Future.delayed(const Duration(milliseconds: 100));
+          }
         }
         _currentTtsBuffer.clear();
       }
@@ -553,9 +559,12 @@ class ChatProvider extends ChangeNotifier {
 
       final settings = _getSettings() ?? AppSettings.defaults();
 
-      // Create initial response message immediately
+      // Create initial messages
+      reasoningMessage = ChatMessage(role: 'assistant', content: '[Reasoning]\n');
       responseMessage = ChatMessage(role: 'assistant', content: '');
-      _messages.add(responseMessage);
+
+      // Only add reasoning message initially
+      _messages.add(reasoningMessage);
       notifyListeners();
 
       // Clear any existing TTS state
@@ -564,7 +573,14 @@ class ChatProvider extends ChangeNotifier {
       // Prepare messages with system prompt
       final messages = <Map<String, dynamic>>[
         {'role': 'system', 'content': _systemPrompt},
-        ..._history.map((m) => m.toJson()).toList()
+        ..._history.map((m) {
+          // Clean any reasoning content from assistant messages
+          if (m.role == 'assistant' && m.content.startsWith('[Reasoning]')) {
+            debugPrint('[Chat] Skipping reasoning content from history message');
+            return null;
+          }
+          return m.toJson();
+        }).whereType<Map<String, dynamic>>().toList(),
       ];
 
       debugPrint('[Chat] Sending messages with system prompt: ${messages.length} messages');
@@ -589,15 +605,15 @@ class ChatProvider extends ChangeNotifier {
         // Process special tokens
         if (chunk == '🤔REASONING_START🤔') {
           isInReasoning = true;
-          if (reasoningMessage == null) {
-            reasoningMessage = ChatMessage(role: 'assistant', content: '[Reasoning]\n');
-            _messages.add(reasoningMessage);
-            notifyListeners();
-          }
           continue;
         }
         if (chunk == '🤔REASONING_END🤔') {
           isInReasoning = false;
+          // Add response message after reasoning ends
+          if (!_messages.contains(responseMessage)) {
+            _messages.add(responseMessage!);
+            notifyListeners();
+          }
           continue;
         }
         if (chunk == '💫SPLIT_MESSAGE💫') {
@@ -638,9 +654,21 @@ class ChatProvider extends ChangeNotifier {
         }
       }
 
-      // Add final message to history
-      if (responseMessage != null) {
-        _history.add(responseMessage);
+      // Add final messages to history
+      if (reasoningMessage != null && reasoningMessage.content.length > 11) { // More than just "[Reasoning]\n"
+        // Skip reasoning messages from history - we don't want to send them back to the model
+        debugPrint('[Chat] Skipping reasoning message from history');
+      }
+      if (responseMessage != null && responseMessage.content.isNotEmpty) {
+        // Only add if the message appears complete
+        final content = responseMessage.content;
+        if (!content.endsWith(' ') &&
+            !content.endsWith('\n') &&
+            content.split('\n').last.length < 3) {
+          debugPrint('[Chat] Skipping incomplete response message from history');
+        } else {
+          _history.add(responseMessage);
+        }
       }
 
       // Wait for all TTS processing to complete
@@ -665,9 +693,16 @@ class ChatProvider extends ChangeNotifier {
     } catch (e, stackTrace) {
       debugPrint('[Chat] Error in sendMessage: $e');
       debugPrint('[Chat] Stack trace: $stackTrace');
+
+      // Remove the last few messages from history if they might be problematic
+      if (_history.length >= 2) {
+        _history.removeLast(); // Remove potentially incomplete assistant message
+        _history.removeLast(); // Remove the user message that triggered the error
+      }
+
       final errorMessage = ChatMessage(
         role: 'assistant',
-        content: 'I apologize, but I encountered an error while processing your message. Please try again.',
+        content: 'I apologize, but I encountered an error while processing your message. Please try asking your question again.',
       );
       _messages.add(errorMessage);
 

@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/chat_provider.dart';
+import '../models/chat_message.dart';
 import 'chat_bubble.dart';
 import 'settings_screen.dart';
 import 'debug_window.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({Key? key}) : super(key: key);
@@ -14,6 +17,51 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   bool _showDebug = false;
+
+  String _formatConversation(List<ChatMessage> messages) {
+    final buffer = StringBuffer();
+
+    for (final message in messages) {
+      // Add timestamp
+      final time = '${message.timestamp.hour}:${message.timestamp.minute.toString().padLeft(2, '0')}';
+
+      // Format based on message type
+      if (message.role == 'user') {
+        buffer.writeln('[$time] User:');
+        buffer.writeln(message.content.trim());
+      } else {
+        buffer.writeln('[$time] Assistant:');
+
+        // Handle reasoning content
+        if (message.content.startsWith('[Reasoning]')) {
+          final parts = message.content.split('\n');
+          if (parts.length > 1) {
+            buffer.writeln('Reasoning:');
+            buffer.writeln(parts.sublist(1).join('\n').trim());
+          }
+        } else {
+          buffer.writeln(message.content.trim());
+        }
+      }
+      buffer.writeln(); // Add blank line between messages
+    }
+
+    return buffer.toString().trim();
+  }
+
+  void _copyConversation(BuildContext context) {
+    final provider = Provider.of<ChatProvider>(context, listen: false);
+    final formattedConversation = _formatConversation(provider.messages);
+
+    Clipboard.setData(ClipboardData(text: formattedConversation)).then((_) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Conversation copied to clipboard'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -40,6 +88,11 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.copy_all),
+            tooltip: 'Copy Conversation',
+            onPressed: () => _copyConversation(context),
+          ),
           IconButton(
             icon: const Icon(Icons.add),
             tooltip: 'New Conversation',

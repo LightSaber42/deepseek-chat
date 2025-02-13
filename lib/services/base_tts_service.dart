@@ -93,6 +93,14 @@ abstract class BaseTTSService {
   String cleanTextForTTS(String text) {
     debugPrint('[TTS] Text before TTS cleaning: """$text"""');
 
+    // Remove emojis and common icons
+    text = text.replaceAll(RegExp(r'[\u{1F300}-\u{1F9FF}]', unicode: true), '');  // Remove emojis
+    text = text.replaceAll(RegExp(r'[\u{2600}-\u{26FF}]', unicode: true), '');    // Remove misc symbols
+    text = text.replaceAll(RegExp(r'[\u{2700}-\u{27BF}]', unicode: true), '');    // Remove dingbats
+    text = text.replaceAll(RegExp(r'[\u{1F000}-\u{1F9FF}]', unicode: true), '');  // Remove supplemental symbols
+    text = text.replaceAll('🤔', '');  // Explicit removal of thinking face
+    text = text.replaceAll('💫', '');  // Explicit removal of dizzy symbol
+
     // Simple markdown cleanup - using basic replacements to avoid regex errors
     text = text
       .replaceAll('**', '')          // Remove bold
@@ -120,7 +128,6 @@ abstract class BaseTTSService {
       RegExp(r'(\d+)\s*\.\s*(\d+)'),
       (match) => '${match.group(1)!}.${match.group(2)!}'
     );
-
 
     // Add spaces after punctuation if missing
     text = text.replaceAllMapped(
