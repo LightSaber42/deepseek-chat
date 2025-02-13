@@ -39,51 +39,83 @@ class SystemTTSService extends BaseTTSService {
   @override
   Future<bool> init() async {
     try {
-      if (_engine == 'flutter_tts') {
-        // For Flutter TTS, don't set the engine
-        await _flutterTts.setLanguage(_options.language);
-        await _flutterTts.setSpeechRate(_options.rate);
-        await _flutterTts.setVolume(_options.volume);
-        await _flutterTts.setPitch(_options.pitch);
+      // Stop any existing TTS operations
+      await _flutterTts.stop();
 
-        if (_options.voice.isNotEmpty) {
-          await _flutterTts.setVoice({"name": _options.voice});
-        }
-      } else {
-        // For system TTS engines, set the engine
+      // Wait a moment for cleanup
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Set engine first if using system TTS
+      if (_engine != 'flutter_tts') {
         await _flutterTts.setEngine(_engine);
-        await _flutterTts.setLanguage(_options.language);
-        await _flutterTts.setSpeechRate(_options.rate);
-        await _flutterTts.setVolume(_options.volume);
-        await _flutterTts.setPitch(_options.pitch);
-
-        if (_options.voice.isNotEmpty) {
-          await _flutterTts.setVoice({"name": _options.voice});
-        }
+        // Wait for engine to be set
+        await Future.delayed(const Duration(milliseconds: 100));
       }
 
-      // Set up handlers
-      _flutterTts.setStartHandler(() {
-        debugPrint('[TTS] Started speaking');
-        isSpeaking = true;
-      });
+      // Configure TTS settings one at a time with small delays
+      await _flutterTts.setLanguage(_options.language);
+      await Future.delayed(const Duration(milliseconds: 50));
 
-      _flutterTts.setCompletionHandler(() {
-        debugPrint('[TTS] Completed speaking');
-        isSpeaking = false;
-      });
+      await _flutterTts.setSpeechRate(_options.rate);
+      await Future.delayed(const Duration(milliseconds: 50));
 
-      _flutterTts.setErrorHandler((msg) {
-        debugPrint('[TTS] Error: $msg');
-        isSpeaking = false;
-      });
+      await _flutterTts.setVolume(_options.volume);
+      await Future.delayed(const Duration(milliseconds: 50));
 
-      _flutterTts.setCancelHandler(() {
-        debugPrint('[TTS] Cancelled');
-        isSpeaking = false;
-      });
+      await _flutterTts.setPitch(_options.pitch);
+      await Future.delayed(const Duration(milliseconds: 50));
 
-      await _speech.initialize();
+      if (_options.voice.isNotEmpty) {
+        await _flutterTts.setVoice({"name": _options.voice});
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
+
+      // Set up handlers with try-catch blocks
+      try {
+        _flutterTts.setStartHandler(() {
+          debugPrint('[TTS] Started speaking');
+          isSpeaking = true;
+        });
+      } catch (e) {
+        debugPrint('[TTS] Error setting start handler: $e');
+      }
+
+      try {
+        _flutterTts.setCompletionHandler(() {
+          debugPrint('[TTS] Completed speaking');
+          isSpeaking = false;
+        });
+      } catch (e) {
+        debugPrint('[TTS] Error setting completion handler: $e');
+      }
+
+      try {
+        _flutterTts.setErrorHandler((msg) {
+          debugPrint('[TTS] Error: $msg');
+          isSpeaking = false;
+        });
+      } catch (e) {
+        debugPrint('[TTS] Error setting error handler: $e');
+      }
+
+      try {
+        _flutterTts.setCancelHandler(() {
+          debugPrint('[TTS] Cancelled');
+          isSpeaking = false;
+        });
+      } catch (e) {
+        debugPrint('[TTS] Error setting cancel handler: $e');
+      }
+
+      // Initialize speech recognition separately
+      try {
+        await _speech.initialize();
+      } catch (e) {
+        debugPrint('[TTS] Error initializing speech recognition: $e');
+        // Non-fatal error, continue
+      }
+
+      debugPrint('[TTS] Initialized with rate: ${_options.rate}');
       return true;
     } catch (e) {
       debugPrint('[TTS] Error initializing: $e');

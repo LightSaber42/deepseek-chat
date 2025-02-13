@@ -46,6 +46,7 @@ class ChatProvider extends ChangeNotifier {
   String get selectedModel => _getSettings().selectedModel;
   String get customOpenrouterModel => _getSettings().customOpenrouterModel;
   String get ttsEngine => _getSettings().ttsEngine ?? 'com.google.android.tts';
+  double get ttsSpeed => _getSettings().ttsSpeed;
 
   List<ChatMessage> get messages => _messages;
   List<String> get debugMessages => _debugMessages;
@@ -207,7 +208,12 @@ class ChatProvider extends ChangeNotifier {
       // Initialize TTS service
       _ttsService = TTSServiceFactory.createService(
         provider: TTSProvider.system,
-        options: TTSServiceFactory.getDefaultOptions(TTSProvider.system),
+        options: TTSServiceOptions(
+          rate: settings.ttsSpeed,
+          pitch: 1.0,
+          volume: 1.0,
+          language: 'en-US',
+        ),
         engine: settings.ttsEngine,
       );
       await _ttsService!.init();
@@ -382,7 +388,10 @@ class ChatProvider extends ChangeNotifier {
       // Only fetch balance for OpenRouter
       await refreshBalance();
     } else {
-      await _llmService!.updateApiKey(model == 'deepseek-reasoner' ? 'deepseek-reasoner' : 'deepseek-chat');
+      // For DeepSeek models, use the stored API key
+      if (settings.apiKey.isNotEmpty) {
+        await _llmService!.updateApiKey(settings.apiKey);
+      }
       _accountBalance = 'Not available for DeepSeek';
       notifyListeners();
     }
@@ -685,7 +694,12 @@ class ChatProvider extends ChangeNotifier {
       // Reinitialize TTS service with new engine
       _ttsService = TTSServiceFactory.createService(
         provider: TTSProvider.system,
-        options: TTSServiceFactory.getDefaultOptions(TTSProvider.system),
+        options: TTSServiceOptions(
+          rate: settings.ttsSpeed,
+          pitch: 1.0,
+          volume: 1.0,
+          language: 'en-US',
+        ),
         engine: engine,
       );
 
@@ -695,6 +709,51 @@ class ChatProvider extends ChangeNotifier {
     } catch (e) {
       debugPrint('[Settings] Error updating TTS engine: $e');
       rethrow;
+    }
+  }
+
+  Future<void> updateTTSSpeed(double speed) async {
+    if (!_isInitialized) return;
+    debugPrint('[Settings] Updating TTS speed to: $speed');
+
+    try {
+      // Update settings first
+      final settings = _getSettings();
+      settings.ttsSpeed = speed;
+      await _settingsBox!.put(0, settings);
+
+      // Stop any ongoing speech
+      if (_ttsService != null && _ttsService!.isSpeaking) {
+        await _ttsService!.stopSpeaking();
+      }
+
+      // Wait a moment for any pending operations to complete
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Create new TTS service with updated speed
+      _ttsService = TTSServiceFactory.createService(
+        provider: TTSProvider.system,
+        options: TTSServiceOptions(
+          rate: speed,
+          pitch: 1.0,
+          volume: 1.0,
+          language: 'en-US',
+        ),
+        engine: settings.ttsEngine,
+      );
+
+      await _ttsService!.init();
+      notifyListeners();
+      debugPrint('[Settings] TTS speed updated successfully');
+    } catch (e) {
+      debugPrint('[Settings] Error updating TTS speed: $e');
+      // Try to recover by reinitializing the service
+      try {
+        await Future.delayed(const Duration(milliseconds: 500));
+        await _initServices();
+      } catch (e2) {
+        debugPrint('[Settings] Error recovering TTS service: $e2');
+      }
     }
   }
 }

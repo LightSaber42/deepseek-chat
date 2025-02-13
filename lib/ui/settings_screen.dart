@@ -63,30 +63,68 @@ Widget _buildTTSEngineSelector(ChatProvider provider) {
                   ? 'com.google.android.tts'
                   : engines.first;
 
-          return DropdownButtonFormField<String>(
-            value: currentValue,
-            decoration: const InputDecoration(
-              border: OutlineInputBorder(),
-              labelText: 'Select TTS Engine',
-            ),
-            items: engines.map((engine) {
-              final name = engine.toString();
-              if (name == 'flutter_tts') {
-                return DropdownMenuItem(
-                  value: name,
-                  child: const Text('Flutter TTS (Original)'),
-                );
-              }
-              return DropdownMenuItem(
-                value: name,
-                child: Text(name.replaceAll('com.', '').replaceAll('.tts', '')),
-              );
-            }).toList(),
-            onChanged: (value) {
-              if (value != null) {
-                provider.updateTTSEngine(value);
-              }
-            },
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              DropdownButtonFormField<String>(
+                value: currentValue,
+                decoration: const InputDecoration(
+                  border: OutlineInputBorder(),
+                  labelText: 'Select TTS Engine',
+                ),
+                items: engines.map((engine) {
+                  final name = engine.toString();
+                  if (name == 'flutter_tts') {
+                    return DropdownMenuItem(
+                      value: name,
+                      child: const Text('Flutter TTS (Original)'),
+                    );
+                  }
+                  return DropdownMenuItem(
+                    value: name,
+                    child: Text(name.replaceAll('com.', '').replaceAll('.tts', '')),
+                  );
+                }).toList(),
+                onChanged: (value) {
+                  if (value != null) {
+                    provider.updateTTSEngine(value);
+                  }
+                },
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'TTS Speed',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+              StatefulBuilder(
+                builder: (context, setState) => Row(
+                  children: [
+                    Expanded(
+                      child: Slider(
+                        value: provider.ttsSpeed,
+                        min: 0.1,
+                        max: 1.0,
+                        divisions: 18,
+                        label: '${(provider.ttsSpeed * 100).round()}%',
+                        onChanged: (value) {
+                          setState(() {
+                            provider.updateTTSSpeed(value);
+                          });
+                        },
+                      ),
+                    ),
+                    SizedBox(
+                      width: 50,
+                      child: Text('${(provider.ttsSpeed * 100).round()}%'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           );
         },
       ),
