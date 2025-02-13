@@ -93,21 +93,20 @@ abstract class BaseTTSService {
   String cleanTextForTTS(String text) {
     debugPrint('[TTS] Text before TTS cleaning: """$text"""');
 
-    // Remove markdown formatting
+    // Simple markdown cleanup
     text = text
-      .replaceAll(RegExp(r'\*\*(.*?)\*\*'), r'$1')  // Bold
-      .replaceAll(RegExp(r'\*(.*?)\*'), r'$1')      // Italic
-      .replaceAll(RegExp(r'`(.*?)`'), r'$1')        // Code
-      .replaceAll(RegExp(r'\[(.*?)\]\(.*?\)'), r'$1')  // Links
-      .replaceAll(RegExp(r'#{1,6}\s'), '')         // Headers
-      .replaceAll('```', '')                       // Code blocks
-      .replaceAll('>', '')                         // Blockquotes
-      .replaceAll('-', '')                         // List items
-      .replaceAll('*', '')                         // List items
-      .replaceAll('_', ' ');                       // Underscores
+      .replaceAll(RegExp(r'\*\*'), '')        // Remove all **
+      .replaceAll(RegExp(r'#{1,6}'), '')      // Remove all #
+      .replaceAll(RegExp(r'(?m)^-(?!\d)'), '') // Remove - at start of line if not followed by digit
+      .replaceAll(RegExp(r'`'), '')           // Remove all backticks
+      .replaceAll(RegExp(r'\[.*?\]\(.*?\)'), '') // Remove links
+      .replaceAll('```', '')                  // Remove code blocks
+      .replaceAll('>', '')                    // Remove blockquotes
+      .replaceAll('*', '')                    // Remove asterisks
+      .replaceAll('_', ' ');                  // Replace underscores with space
 
     // Basic space normalization
-    text = text.replaceAll(RegExp(r'\s{3,}'), ' ').trim();
+    text = text.replaceAll(RegExp(r'\s{2,}'), ' ').trim();
 
     // Fix decimal numbers
     text = text.replaceAllMapped(
